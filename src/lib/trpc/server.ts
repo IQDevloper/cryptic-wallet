@@ -2,16 +2,20 @@ import { initTRPC, TRPCError } from '@trpc/server'
 import { type CreateNextContextOptions } from '@trpc/server/adapters/next'
 import { PrismaClient } from '@prisma/client'
 import { z } from 'zod'
+import { getCurrentUser, hashPassword, comparePasswords } from '@/lib/auth'
 
 // Create Prisma client
 const prisma = new PrismaClient()
 
 // Create context for tRPC
 export const createTRPCContext = async (opts: CreateNextContextOptions) => {
+  const user = await getCurrentUser()
+  
   return {
     prisma,
     req: opts.req,
     res: opts.res,
+    user,
   }
 }
 
@@ -28,8 +32,38 @@ const t = initTRPC.context<Context>().create({
 export const createTRPCRouter = t.router
 export const publicProcedure = t.procedure
 
-// Merchant authentication middleware
-const authenticatedProcedure = t.procedure.use(async ({ ctx, next }) => {
+// User authentication middleware
+const userAuthenticatedProcedure = t.procedure.use(async ({ ctx, next }) => {
+  if (!ctx.user) {
+    throw new TRPCError({
+      code: 'UNAUTHORIZED',
+      message: 'Authentication required',
+    })
+  }
+
+  // Verify user still exists and is active
+  const user = await ctx.prisma.user.findUnique({
+    where: { id: ctx.user.userId },
+  })
+
+  if (!user || !user.isActive) {
+    throw new TRPCError({
+      code: 'UNAUTHORIZED',
+      message: 'User not found or inactive',
+    })
+  }
+
+  return next({
+    ctx: {
+      ...ctx,
+      user: ctx.user,
+      dbUser: user,
+    },
+  })
+})
+
+// Merchant authentication middleware (for API access)
+const merchantAuthenticatedProcedure = t.procedure.use(async ({ ctx, next }) => {
   const apiKey = ctx.req.headers.authorization?.replace('Bearer ', '')
   
   if (!apiKey) {
@@ -58,10 +92,55 @@ const authenticatedProcedure = t.procedure.use(async ({ ctx, next }) => {
   })
 })
 
+// Authentication router
+const authRouter = createTRPCRouter({
+  // Get current user
+  me: userAuthenticatedProcedure.query(async ({ ctx }) => {
+    return {
+      userId: ctx.user.userId,
+      email: ctx.user.email,
+      name: ctx.user.name,
+    }
+  }),
+})
+
+// User router
+const userRouter = createTRPCRouter({
+  // Get user profile
+  getProfile: userAuthenticatedProcedure.query(async ({ ctx }) => {
+    return {
+      id: ctx.dbUser.id,
+      name: ctx.dbUser.name,
+      email: ctx.dbUser.email,
+      createdAt: ctx.dbUser.createdAt,
+    }
+  }),
+
+  // Update user profile
+  updateProfile: userAuthenticatedProcedure
+    .input(z.object({
+      name: z.string().min(2, 'Name must be at least 2 characters').optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const updatedUser = await ctx.prisma.user.update({
+        where: { id: ctx.user.userId },
+        data: {
+          ...(input.name && { name: input.name }),
+        },
+      })
+
+      return {
+        id: updatedUser.id,
+        name: updatedUser.name,
+        email: updatedUser.email,
+      }
+    }),
+})
+
 // Merchant router
 const merchantRouter = createTRPCRouter({
   // Get merchant profile
-  getProfile: authenticatedProcedure.query(async ({ ctx }) => {
+  getProfile: merchantAuthenticatedProcedure.query(async ({ ctx }) => {
     return {
       id: ctx.merchant.id,
       name: ctx.merchant.name,
@@ -72,7 +151,7 @@ const merchantRouter = createTRPCRouter({
   }),
 
   // Get merchant wallets
-  getWallets: authenticatedProcedure.query(async ({ ctx }) => {
+  getWallets: merchantAuthenticatedProcedure.query(async ({ ctx }) => {
     return ctx.prisma.wallet.findMany({
       where: { merchantId: ctx.merchant.id },
       include: {
@@ -86,7 +165,7 @@ const merchantRouter = createTRPCRouter({
   }),
 
   // Get merchant invoices
-  getInvoices: authenticatedProcedure
+  getInvoices: merchantAuthenticatedProcedure
     .input(
       z.object({
         page: z.number().min(1).default(1),
@@ -170,6 +249,8 @@ const currencyRouter = createTRPCRouter({
 
 // Main app router
 export const appRouter = createTRPCRouter({
+  auth: authRouter,
+  user: userRouter,
   merchant: merchantRouter,
   currency: currencyRouter,
 })

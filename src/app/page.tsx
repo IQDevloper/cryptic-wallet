@@ -21,8 +21,12 @@ export default function HomePage() {
           <Link href="#how-it-works" className="text-muted-foreground hover:text-foreground">How it Works</Link>
           <Link href="#pricing" className="text-muted-foreground hover:text-foreground">Pricing</Link>
           <ThemeToggle />
-          <Button variant="outline">Sign In</Button>
-          <Button>Get Started</Button>
+          <Link href="/login">
+            <Button variant="outline">Sign In</Button>
+          </Link>
+          <Link href="/register">
+            <Button>Get Started</Button>
+          </Link>
         </div>
       </nav>
 
@@ -40,13 +44,17 @@ export default function HomePage() {
           across multiple blockchains with enterprise-grade security and real-time processing.
         </p>
         <div className="flex flex-col sm:flex-row gap-4 justify-center mb-12">
-          <Button size="lg" className="text-lg px-8 py-4 bg-blue-600 hover:bg-blue-700 text-white">
-            Start Accepting Crypto
-            <ArrowRight className="ml-2 w-5 h-5" />
-          </Button>
-          <Button size="lg" variant="outline" className="text-lg px-8 py-4">
-            View Live Demo
-          </Button>
+          <Link href="/register">
+            <Button size="lg" className="text-lg px-8 py-4 bg-blue-600 hover:bg-blue-700 text-white">
+              Start Accepting Crypto
+              <ArrowRight className="ml-2 w-5 h-5" />
+            </Button>
+          </Link>
+          <Link href="/dashboard">
+            <Button size="lg" variant="outline" className="text-lg px-8 py-4">
+              View Live Demo
+            </Button>
+          </Link>
         </div>
 
         {/* Trust Indicators */}
@@ -296,10 +304,12 @@ export default function HomePage() {
                   </li>
                 </ul>
 
-                <Button size="lg" className="w-full">
-                  Get Started Now
-                  <ArrowRight className="ml-2 w-5 h-5" />
-                </Button>
+                <Link href="/register">
+                  <Button size="lg" className="w-full">
+                    Get Started Now
+                    <ArrowRight className="ml-2 w-5 h-5" />
+                  </Button>
+                </Link>
               </CardContent>
             </Card>
           </div>
@@ -316,10 +326,12 @@ export default function HomePage() {
             Join thousands of businesses already using Cryptic Gateway to accept cryptocurrency payments.
           </p>
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
-            <Button size="lg" variant="secondary" className="text-lg px-8 py-4">
-              Create Free Account
-              <ArrowRight className="ml-2 w-5 h-5" />
-            </Button>
+            <Link href="/register">
+              <Button size="lg" variant="secondary" className="text-lg px-8 py-4">
+                Create Free Account
+                <ArrowRight className="ml-2 w-5 h-5" />
+              </Button>
+            </Link>
             <Button size="lg" variant="outline" className="text-lg px-8 py-4 text-white border-white hover:bg-white hover:text-blue-600">
               Contact Sales
             </Button>

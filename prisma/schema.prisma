@@ -23,6 +23,21 @@ enum TransactionStatus {
   FAILED
 }
 
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String
+  password  String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  merchant Merchant?
+
+  @@map("users")
+}
+
 model Merchant {
   id          String   @id @default(cuid())
   name        String
@@ -35,6 +50,8 @@ model Merchant {
   updatedAt   DateTime @updatedAt
 
   // Relations
+  userId   String? @unique
+  user     User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
   wallets  Wallet[]
   invoices Invoice[]
 
