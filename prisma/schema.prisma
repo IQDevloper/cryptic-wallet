@@ -1,0 +1,139 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum InvoiceStatus {
+  PENDING
+  PAID
+  EXPIRED
+  CANCELLED
+}
+
+enum TransactionStatus {
+  PENDING
+  CONFIRMED
+  FAILED
+}
+
+model Merchant {
+  id          String   @id @default(cuid())
+  name        String
+  email       String   @unique
+  apiKey      String   @unique
+  apiKeyHash  String
+  webhookUrl  String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  wallets  Wallet[]
+  invoices Invoice[]
+
+  @@map("merchants")
+}
+
+model Network {
+  id                 String   @id @default(cuid())
+  code               String   @unique // BTC, ETH, BSC, TRX, MATIC
+  name               String   // Bitcoin, Ethereum, Binance Smart Chain, etc.
+  tatumChainId       String   @unique // bitcoin, ethereum, bsc, tron, polygon
+  blockConfirmations Int      @default(6)
+  isTestnet          Boolean  @default(false)
+  isActive           Boolean  @default(true)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  // Relations
+  currencies Currency[]
+
+  @@map("networks")
+}
+
+model Currency {
+  id              String   @id @default(cuid())
+  code            String   @unique // BTC, ETH, USDT_ERC20, etc.
+  name            String   // Bitcoin, Ethereum, USDT (ERC20), etc.
+  symbol          String   // BTC, ETH, USDT
+  decimals        Int      // 8 for BTC, 18 for ETH, 6 for USDT
+  isToken         Boolean  @default(false)
+  contractAddress String?  // For tokens only
+  imageUrl        String?
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // Relations
+  networkId String
+  network   Network @relation(fields: [networkId], references: [id])
+  wallets   Wallet[]
+
+  @@map("currencies")
+}
+
+model Wallet {
+  id             String   @id @default(cuid())
+  tatumAccountId String   @unique // Tatum virtual account ID
+  balance        Decimal  @default(0) @db.Decimal(36, 18)
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  // Relations
+  merchantId String
+  merchant   Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  currencyId String
+  currency   Currency @relation(fields: [currencyId], references: [id])
+  invoices   Invoice[]
+
+  @@unique([merchantId, currencyId])
+  @@map("wallets")
+}
+
+model Invoice {
+  id             String        @id @default(cuid())
+  amount         Decimal       @db.Decimal(36, 18)
+  currency       String        // Currency code for display
+  depositAddress String        @unique // Unique payment address
+  description    String?
+  status         InvoiceStatus @default(PENDING)
+  paidAt         DateTime?
+  expiresAt      DateTime
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  // Relations
+  merchantId String
+  merchant   Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  walletId   String
+  wallet     Wallet   @relation(fields: [walletId], references: [id])
+  transactions Transaction[]
+
+  @@map("invoices")
+}
+
+model Transaction {
+  id              String            @id @default(cuid())
+  txHash          String            @unique // Blockchain transaction hash
+  amount          Decimal           @db.Decimal(36, 18)
+  blockNumber     BigInt?           // Block number when confirmed
+  confirmations   Int               @default(0)
+  status          TransactionStatus @default(PENDING)
+  tatumWebhookId  String?           @unique // For idempotency
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  // Relations
+  invoiceId String
+  invoice   Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@map("transactions")
+}
