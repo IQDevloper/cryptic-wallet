@@ -36,7 +36,6 @@ model User {
 model Merchant {
   id                String            @id @default(cuid())
   name              String
-  email             String            @unique
   apiKey            String            @unique
   apiKeyHash        String
   webhookUrl        String?
@@ -71,7 +70,6 @@ model Merchant {
   @@index([createdAt])
   @@index([deletedAt])
   @@index([apiKeyLastUsed])
-  @@index([email])
   @@map("merchants")
 }
 
@@ -106,35 +104,54 @@ model Network {
   @@map("networks")
 }
 
-model Currency {
+model BaseCurrency {
   id              String         @id @default(cuid())
-  code            String         @unique
-  name            String
-  symbol          String
-  decimals        Int
-  isToken         Boolean        @default(false)
-  contractAddress String?
+  code            String         @unique // "USDT", "BTC", "ETH"
+  name            String         // "Tether USD", "Bitcoin", "Ethereum"
+  symbol          String         // "USDT", "BTC", "ETH"
   imageUrl        String?
+  coinGeckoId     String?
+  coinMarketCapId String?
   isActive        Boolean        @default(true)
   createdAt       DateTime       @default(now())
   updatedAt       DateTime       @updatedAt
-  networkId       String
-  coinGeckoId     String?
-  coinMarketCapId String?
   deletedAt       DateTime?
-  maxAmount       Decimal?       @db.Decimal(36, 18)
-  minAmount       Decimal        @default(0) @db.Decimal(36, 18)
   priority        Int            @default(0)
-  tokenStandard   String?
-  network         Network        @relation(fields: [networkId], references: [id])
+  currencies      Currency[]
   priceHistory    PriceHistory[]
-  wallets         Wallet[]
 
   @@index([code])
   @@index([symbol])
   @@index([isActive])
-  @@index([networkId])
   @@index([priority])
+  @@index([deletedAt])
+  @@map("base_currencies")
+}
+
+model Currency {
+  id              String         @id @default(cuid())
+  baseCurrencyId  String
+  networkId       String
+  contractAddress String?        // Token contract address (null for native coins)
+  decimals        Int
+  isToken         Boolean        @default(false)
+  tokenStandard   String?        // "BEP-20", "TRC-20", "ERC-20"
+  isActive        Boolean        @default(true)
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  deletedAt       DateTime?
+  maxAmount       Decimal?       @db.Decimal(36, 18)
+  minAmount       Decimal        @default(0) @db.Decimal(36, 18)
+  withdrawFee     Decimal        @default(0) @db.Decimal(36, 18)
+  baseCurrency    BaseCurrency   @relation(fields: [baseCurrencyId], references: [id])
+  network         Network        @relation(fields: [networkId], references: [id])
+  wallets         Wallet[]
+
+  @@unique([baseCurrencyId, networkId]) // Same base currency can exist on multiple networks
+  @@index([baseCurrencyId])
+  @@index([networkId])
+  @@index([contractAddress])
+  @@index([isActive])
   @@index([deletedAt])
   @@map("currencies")
 }
@@ -424,17 +441,17 @@ model BalanceHistory {
 }
 
 model PriceHistory {
-  id         String   @id @default(cuid())
-  price      Decimal  @db.Decimal(18, 8)
-  volume24h  Decimal? @db.Decimal(18, 8)
-  timestamp  DateTime @default(now())
-  source     String   @default("coingecko")
-  createdAt  DateTime @default(now())
-  currencyId String
-  currency   Currency @relation(fields: [currencyId], references: [id], onDelete: Cascade)
+  id             String       @id @default(cuid())
+  price          Decimal      @db.Decimal(18, 8)
+  volume24h      Decimal?     @db.Decimal(18, 8)
+  timestamp      DateTime     @default(now())
+  source         String       @default("coingecko")
+  createdAt      DateTime     @default(now())
+  baseCurrencyId String
+  baseCurrency   BaseCurrency @relation(fields: [baseCurrencyId], references: [id], onDelete: Cascade)
 
-  @@unique([currencyId, timestamp, source])
-  @@index([currencyId])
+  @@unique([baseCurrencyId, timestamp, source])
+  @@index([baseCurrencyId])
   @@index([timestamp])
   @@index([source])
   @@map("price_history")

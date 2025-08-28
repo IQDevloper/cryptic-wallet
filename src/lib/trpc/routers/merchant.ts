@@ -7,7 +7,6 @@ export const merchantRouter = createTRPCRouter({
     return {
       id: ctx.merchant.id,
       name: ctx.merchant.name,
-      email: ctx.merchant.email,
       webhookUrl: ctx.merchant.webhookUrl,
       createdAt: ctx.merchant.createdAt,
     }
@@ -33,7 +32,6 @@ export const merchantRouter = createTRPCRouter({
       if (input.search) {
         where.OR = [
           { name: { contains: input.search, mode: 'insensitive' } },
-          { email: { contains: input.search, mode: 'insensitive' } },
         ]
       }
 
@@ -47,7 +45,6 @@ export const merchantRouter = createTRPCRouter({
           select: {
             id: true,
             name: true,
-            email: true,
             isActive: true,
             webhookUrl: true,
             createdAt: true,
@@ -133,7 +130,6 @@ export const merchantRouter = createTRPCRouter({
       const merchant = await ctx.prisma.merchant.create({
         data: {
           name: input.name,
-          email: input.websiteUrl, // Temporarily store website URL in email field
           businessAddress: input.businessAddress,
           webhookUrl: input.webhookUrl,
           isActive: input.isActive,
@@ -146,7 +142,10 @@ export const merchantRouter = createTRPCRouter({
       // Get all active currencies to create wallets
       const activeCurrencies = await ctx.prisma.currency.findMany({
         where: { isActive: true },
-        include: { network: true }
+        include: { 
+          network: true,
+          baseCurrency: true 
+        }
       })
 
       // Create wallets for all active currencies
@@ -192,7 +191,6 @@ export const merchantRouter = createTRPCRouter({
       return {
         id: merchant.id,
         name: merchant.name,
-        email: merchant.email, // This contains the website URL temporarily
         apiKey: merchant.apiKey,
         isActive: merchant.isActive,
         createdAt: merchant.createdAt,
@@ -234,6 +232,7 @@ export const merchantRouter = createTRPCRouter({
         currency: {
           include: {
             network: true,
+            baseCurrency: true,
           },
         },
       },
@@ -266,6 +265,7 @@ export const merchantRouter = createTRPCRouter({
                 currency: {
                   include: {
                     network: true,
+                    baseCurrency: true,
                   },
                 },
               },
@@ -359,6 +359,7 @@ export const merchantRouter = createTRPCRouter({
           currency: {
             include: {
               network: true,
+              baseCurrency: true,
             },
           },
         },
@@ -366,7 +367,7 @@ export const merchantRouter = createTRPCRouter({
 
       // Get currency prices from external API
       const { fetchPricesFromAPI } = await import('@/app/services/price-provider')
-      const currencyCodes = wallets.map(w => w.currency.code)
+      const currencyCodes = wallets.map(w => w.currency.baseCurrency.code)
       let prices: Record<string, number> = {}
       
       try {
@@ -379,17 +380,22 @@ export const merchantRouter = createTRPCRouter({
       // Transform to balance format with prices
       const balances = wallets.map((wallet) => ({
         currency: {
-          code: wallet.currency.code,
-          name: wallet.currency.name,
-          symbol: wallet.currency.symbol,
-          imageUrl: wallet.currency.imageUrl,
+          id: wallet.currency.id,
+          code: wallet.currency.baseCurrency.code,
+          name: wallet.currency.baseCurrency.name,
+          symbol: wallet.currency.baseCurrency.symbol,
+          imageUrl: wallet.currency.baseCurrency.imageUrl,
+          isToken: wallet.currency.isToken,
+          tokenStandard: wallet.currency.tokenStandard,
+          contractAddress: wallet.currency.contractAddress,
           network: {
+            id: wallet.currency.network.id,
             name: wallet.currency.network.name,
             code: wallet.currency.network.code,
           }
         },
         amount: parseFloat(wallet.balance.toString()),
-        price: prices[wallet.currency.code] || 0,
+        price: prices[wallet.currency.baseCurrency.code] || 0,
         lastUpdated: wallet.updatedAt.toISOString(),
       }))
 
@@ -434,6 +440,7 @@ export const merchantRouter = createTRPCRouter({
                 currency: {
                   include: {
                     network: true,
+                    baseCurrency: true,
                   },
                 },
               },

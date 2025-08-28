@@ -26,7 +26,6 @@ import Link from 'next/link'
 type MerchantListItem = {
   id: string
   name: string
-  email: string
   isActive: boolean
   webhookUrl: string | null
   createdAt: string
