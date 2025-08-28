@@ -1,4 +1,4 @@
-import { CreateInvoiceForm } from '@/components/invoices/create-invoice-form'
+import { CreateInvoiceForm } from './_components/create-invoice-form'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   Breadcrumb,

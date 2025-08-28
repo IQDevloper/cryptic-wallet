@@ -378,4 +378,229 @@ export const merchantRouter = createTRPCRouter({
         },
       }
     }),
+
+  updateWebhookUrl: merchantAuthenticatedProcedure
+    .input(
+      z.object({
+        merchantId: z.string(),
+        webhookUrl: z.string().url().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      // Verify the merchant belongs to the authenticated user
+      const merchant = await ctx.prisma.merchant.findFirst({
+        where: {
+          id: input.merchantId,
+          userId: ctx.user!.userId,
+        },
+      })
+
+      if (!merchant) {
+        throw new TRPCError({
+          code: 'NOT_FOUND',
+          message: 'Merchant not found',
+        })
+      }
+
+      const updatedMerchant = await ctx.prisma.merchant.update({
+        where: { id: input.merchantId },
+        data: { webhookUrl: input.webhookUrl },
+      })
+
+      return updatedMerchant
+    }),
+
+  update: merchantAuthenticatedProcedure
+    .input(
+      z.object({
+        merchantId: z.string(),
+        name: z.string().optional(),
+        businessName: z.string().optional(),
+        businessAddress: z.string().optional(),
+        taxId: z.string().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { merchantId, ...updateData } = input
+      
+      // Verify the merchant belongs to the authenticated user
+      const merchant = await ctx.prisma.merchant.findFirst({
+        where: {
+          id: merchantId,
+          userId: ctx.user!.userId,
+        },
+      })
+
+      if (!merchant) {
+        throw new TRPCError({
+          code: 'NOT_FOUND',
+          message: 'Merchant not found',
+        })
+      }
+
+      const updatedMerchant = await ctx.prisma.merchant.update({
+        where: { id: merchantId },
+        data: updateData,
+      })
+
+      return updatedMerchant
+    }),
+
+  updateStatus: merchantAuthenticatedProcedure
+    .input(
+      z.object({
+        merchantId: z.string(),
+        isActive: z.boolean(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      // Verify the merchant belongs to the authenticated user
+      const merchant = await ctx.prisma.merchant.findFirst({
+        where: {
+          id: input.merchantId,
+          userId: ctx.user!.userId,
+        },
+      })
+
+      if (!merchant) {
+        throw new TRPCError({
+          code: 'NOT_FOUND',
+          message: 'Merchant not found',
+        })
+      }
+
+      const updatedMerchant = await ctx.prisma.merchant.update({
+        where: { id: input.merchantId },
+        data: { isActive: input.isActive },
+      })
+
+      return updatedMerchant
+    }),
+
+  getBalances: merchantAuthenticatedProcedure
+    .input(
+      z.object({
+        merchantId: z.string(),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      // Verify the merchant belongs to the authenticated user
+      const merchant = await ctx.prisma.merchant.findFirst({
+        where: {
+          id: input.merchantId,
+          userId: ctx.user!.userId,
+        },
+      })
+
+      if (!merchant) {
+        throw new TRPCError({
+          code: 'NOT_FOUND',
+          message: 'Merchant not found',
+        })
+      }
+
+      // Get merchant wallets with balances
+      const wallets = await ctx.prisma.wallet.findMany({
+        where: {
+          merchantId: input.merchantId,
+        },
+        include: {
+          currency: {
+            include: {
+              network: true,
+            },
+          },
+        },
+      })
+
+      // Transform to balance format
+      const balances = wallets.map((wallet) => ({
+        currency: {
+          code: wallet.currency.code,
+          name: wallet.currency.name,
+          imageUrl: wallet.currency.imageUrl,
+        },
+        amount: parseFloat(wallet.balance.toString()),
+        price: 0, // TODO: Add price fetching from external API
+        lastUpdated: wallet.updatedAt,
+      }))
+
+      return balances
+    }),
+
+  invoices: merchantAuthenticatedProcedure
+    .input(
+      z.object({
+        merchantId: z.string(),
+        page: z.number().min(1).default(1),
+        limit: z.number().min(1).max(100).default(10),
+        search: z.string().optional(),
+        status: z.enum(['PENDING', 'PAID', 'EXPIRED', 'CANCELLED']).optional(),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      // Verify the merchant belongs to the authenticated user
+      const merchant = await ctx.prisma.merchant.findFirst({
+        where: {
+          id: input.merchantId,
+          userId: ctx.user!.userId,
+        },
+      })
+
+      if (!merchant) {
+        throw new TRPCError({
+          code: 'NOT_FOUND',
+          message: 'Merchant not found',
+        })
+      }
+
+      const skip = (input.page - 1) * input.limit
+      const where: any = {
+        merchantId: input.merchantId,
+      }
+
+      if (input.search) {
+        where.OR = [
+          { title: { contains: input.search, mode: 'insensitive' } },
+          { description: { contains: input.search, mode: 'insensitive' } },
+          { id: { contains: input.search, mode: 'insensitive' } },
+        ]
+      }
+
+      if (input.status) {
+        where.status = input.status
+      }
+
+      const [invoices, total] = await Promise.all([
+        ctx.prisma.invoice.findMany({
+          where,
+          include: {
+            wallet: {
+              include: {
+                currency: {
+                  include: {
+                    network: true,
+                  },
+                },
+              },
+            },
+            transactions: true,
+          },
+          orderBy: { createdAt: 'desc' },
+          skip,
+          take: input.limit,
+        }),
+        ctx.prisma.invoice.count({ where }),
+      ])
+
+      return {
+        invoices,
+        pagination: {
+          page: input.page,
+          limit: input.limit,
+          total,
+          pages: Math.ceil(total / input.limit),
+        },
+      }
+    }),
 })
