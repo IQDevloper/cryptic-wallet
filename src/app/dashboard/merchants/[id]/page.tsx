@@ -31,8 +31,8 @@ const MerchantInvoices = dynamic(
     }
 )
 
-const MerchantBalances = dynamic(
-    () => import('./_components/merchant-balances').then(mod => mod.MerchantBalances),
+const MerchantOverview = dynamic(
+    () => import('./_components/merchant-overview').then(mod => mod.MerchantOverview),
     {
         loading: () => <Skeleton className="h-[400px] w-full" />
     }
@@ -98,7 +98,7 @@ export default async function MerchantPage({
                 <TabsContent value="overview" className="space-y-4">
                     {tab === 'overview' && (
                         <Suspense fallback={<Skeleton className="h-[400px] w-full" />}>
-                            <MerchantBalances merchant={merchant} />
+                            <MerchantOverview merchantId={merchantId} />
                         </Suspense>
                     )}
                 </TabsContent>

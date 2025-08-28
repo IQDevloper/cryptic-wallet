@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { TRPCError } from '@trpc/server'
-import { createTRPCRouter, userAuthenticatedProcedure, merchantAuthenticatedProcedure } from '../procedures'
+import { createTRPCRouter, userAuthenticatedProcedure, merchantAuthenticatedProcedure, userOwnsMerchantProcedure } from '../procedures'
 
 export const merchantRouter = createTRPCRouter({
   // Get merchant profile
@@ -173,117 +173,6 @@ export const merchantRouter = createTRPCRouter({
       return merchant
     }),
 
-  // Get merchant statistics
-  getStats: userAuthenticatedProcedure
-    .input(z.object({ merchantId: z.string().cuid() }))
-    .query(async ({ ctx, input }) => {
-      const merchant = await ctx.prisma.merchant.findFirst({
-        where: {
-          id: input.merchantId,
-          userId: ctx.user.userId,
-        },
-      })
-
-      if (!merchant) {
-        throw new TRPCError({
-          code: 'NOT_FOUND',
-          message: 'Merchant not found',
-        })
-      }
-
-      // Get current month stats
-      const now = new Date()
-      const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1)
-      const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1)
-      const endOfLastMonth = new Date(now.getFullYear(), now.getMonth(), 0)
-
-      const [
-        currentMonthRevenue,
-        lastMonthRevenue,
-        currentMonthInvoices,
-        lastMonthInvoices,
-        currentMonthPaid,
-        lastMonthPaid,
-        totalInvoices,
-        pendingInvoices,
-      ] = await Promise.all([
-        ctx.prisma.invoice.aggregate({
-          where: {
-            merchantId: input.merchantId,
-            status: 'PAID',
-            createdAt: { gte: startOfMonth },
-          },
-          _sum: { amountPaid: true },
-        }),
-        ctx.prisma.invoice.aggregate({
-          where: {
-            merchantId: input.merchantId,
-            status: 'PAID',
-            createdAt: { gte: startOfLastMonth, lte: endOfLastMonth },
-          },
-          _sum: { amountPaid: true },
-        }),
-        ctx.prisma.invoice.count({
-          where: {
-            merchantId: input.merchantId,
-            createdAt: { gte: startOfMonth },
-          },
-        }),
-        ctx.prisma.invoice.count({
-          where: {
-            merchantId: input.merchantId,
-            createdAt: { gte: startOfLastMonth, lte: endOfLastMonth },
-          },
-        }),
-        ctx.prisma.invoice.count({
-          where: {
-            merchantId: input.merchantId,
-            status: 'PAID',
-            createdAt: { gte: startOfMonth },
-          },
-        }),
-        ctx.prisma.invoice.count({
-          where: {
-            merchantId: input.merchantId,
-            status: 'PAID',
-            createdAt: { gte: startOfLastMonth, lte: endOfLastMonth },
-          },
-        }),
-        ctx.prisma.invoice.count({
-          where: { merchantId: input.merchantId },
-        }),
-        ctx.prisma.invoice.count({
-          where: {
-            merchantId: input.merchantId,
-            status: 'PENDING',
-          },
-        }),
-      ])
-
-      const currentRevenue = currentMonthRevenue._sum.amountPaid?.toNumber() || 0
-      const lastRevenue = lastMonthRevenue._sum.amountPaid?.toNumber() || 0
-      const revenueChange = lastRevenue > 0 ? ((currentRevenue - lastRevenue) / lastRevenue) * 100 : 0
-
-      const invoiceChange = lastMonthInvoices > 0 ? ((currentMonthInvoices - lastMonthInvoices) / lastMonthInvoices) * 100 : 0
-
-      const currentSuccessRate = currentMonthInvoices > 0 ? (currentMonthPaid / currentMonthInvoices) * 100 : 0
-      const lastSuccessRate = lastMonthInvoices > 0 ? (lastMonthPaid / lastMonthInvoices) * 100 : 0
-      const successRateChange = lastSuccessRate > 0 ? currentSuccessRate - lastSuccessRate : 0
-
-      const pendingChange = 0 // Calculate based on your needs
-
-      return {
-        totalRevenue: currentRevenue,
-        totalInvoices,
-        successRate: currentSuccessRate,
-        pendingInvoices,
-        revenueChange,
-        invoiceChange,
-        successRateChange,
-        pendingChange,
-      }
-    }),
-
   // Regenerate API key
   regenerateApiKey: userAuthenticatedProcedure
     .input(z.object({ merchantId: z.string().cuid() }))
@@ -379,7 +268,7 @@ export const merchantRouter = createTRPCRouter({
       }
     }),
 
-  updateWebhookUrl: merchantAuthenticatedProcedure
+  updateWebhookUrl: userAuthenticatedProcedure
     .input(
       z.object({
         merchantId: z.string(),
@@ -391,7 +280,7 @@ export const merchantRouter = createTRPCRouter({
       const merchant = await ctx.prisma.merchant.findFirst({
         where: {
           id: input.merchantId,
-          userId: ctx.user!.userId,
+          userId: ctx.user.userId,
         },
       })
 
@@ -410,7 +299,7 @@ export const merchantRouter = createTRPCRouter({
       return updatedMerchant
     }),
 
-  update: merchantAuthenticatedProcedure
+  update: userAuthenticatedProcedure
     .input(
       z.object({
         merchantId: z.string(),
@@ -427,7 +316,7 @@ export const merchantRouter = createTRPCRouter({
       const merchant = await ctx.prisma.merchant.findFirst({
         where: {
           id: merchantId,
-          userId: ctx.user!.userId,
+          userId: ctx.user.userId,
         },
       })
 
@@ -446,7 +335,7 @@ export const merchantRouter = createTRPCRouter({
       return updatedMerchant
     }),
 
-  updateStatus: merchantAuthenticatedProcedure
+  updateStatus: userAuthenticatedProcedure
     .input(
       z.object({
         merchantId: z.string(),
@@ -458,7 +347,7 @@ export const merchantRouter = createTRPCRouter({
       const merchant = await ctx.prisma.merchant.findFirst({
         where: {
           id: input.merchantId,
-          userId: ctx.user!.userId,
+          userId: ctx.user.userId,
         },
       })
 
@@ -477,32 +366,20 @@ export const merchantRouter = createTRPCRouter({
       return updatedMerchant
     }),
 
-  getBalances: merchantAuthenticatedProcedure
+  getBalances: userOwnsMerchantProcedure
     .input(
       z.object({
         merchantId: z.string(),
       })
     )
     .query(async ({ ctx, input }) => {
-      // Verify the merchant belongs to the authenticated user
-      const merchant = await ctx.prisma.merchant.findFirst({
-        where: {
-          id: input.merchantId,
-          userId: ctx.user!.userId,
-        },
-      })
-
-      if (!merchant) {
-        throw new TRPCError({
-          code: 'NOT_FOUND',
-          message: 'Merchant not found',
-        })
-      }
-
+      // Merchant ownership already verified by userOwnsMerchantProcedure
+      // ctx.merchant is now available and guaranteed to belong to the user
+      
       // Get merchant wallets with balances
       const wallets = await ctx.prisma.wallet.findMany({
         where: {
-          merchantId: input.merchantId,
+          merchantId: ctx.merchant.id,
         },
         include: {
           currency: {
@@ -513,22 +390,40 @@ export const merchantRouter = createTRPCRouter({
         },
       })
 
-      // Transform to balance format
+      // Get currency prices from external API
+      const { fetchPricesFromAPI } = await import('@/app/services/price-provider')
+      const currencyCodes = wallets.map(w => w.currency.code)
+      let prices: Record<string, number> = {}
+      
+      try {
+        prices = await fetchPricesFromAPI(currencyCodes)
+      } catch (error) {
+        console.error('Failed to fetch prices:', error)
+        // Continue without prices if fetch fails
+      }
+
+      // Transform to balance format with prices
       const balances = wallets.map((wallet) => ({
         currency: {
           code: wallet.currency.code,
           name: wallet.currency.name,
+          symbol: wallet.currency.symbol,
           imageUrl: wallet.currency.imageUrl,
+          network: {
+            name: wallet.currency.network.name,
+            code: wallet.currency.network.code,
+          }
         },
         amount: parseFloat(wallet.balance.toString()),
-        price: 0, // TODO: Add price fetching from external API
-        lastUpdated: wallet.updatedAt,
+        price: prices[wallet.currency.code] || 0,
+        lastUpdated: wallet.updatedAt.toISOString(),
       }))
 
-      return balances
+      // Sort by value (amount * price) in descending order
+      return balances.sort((a, b) => (b.amount * b.price) - (a.amount * a.price))
     }),
 
-  invoices: merchantAuthenticatedProcedure
+  invoices: userAuthenticatedProcedure
     .input(
       z.object({
         merchantId: z.string(),
@@ -543,7 +438,7 @@ export const merchantRouter = createTRPCRouter({
       const merchant = await ctx.prisma.merchant.findFirst({
         where: {
           id: input.merchantId,
-          userId: ctx.user!.userId,
+          userId: ctx.user.userId,
         },
       })
 
