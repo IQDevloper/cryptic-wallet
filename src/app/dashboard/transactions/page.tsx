@@ -4,86 +4,89 @@ import { useState } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 import { 
-  Bitcoin,
-  Ethereum,
-  DollarSign,
-  Search,
-  Filter,
-  Download,
-  ExternalLink,
-  Calendar
-} from "lucide-react"
+  getCryptoIcon,
+  getStatusColors,
+  BusinessIcons,
+  ArrowIcons,
+  StatusIcons,
+  CryptoIcons
+} from "@/lib/icons"
 
 // Mock transaction data
 const transactions = [
   {
     id: "tx_001",
     hash: "0x1234...5678",
-    amount: "0.0234 BTC",
+    amount: "0.0234",
+    currency: "BTC",
     usdValue: "$1,234.56",
-    currency: "Bitcoin",
     network: "Bitcoin",
-    status: "completed",
-    type: "payment",
+    status: "confirmed",
+    type: "incoming",
     customer: "customer@example.com",
     invoice: "INV-001",
     timestamp: "2024-01-15T10:30:00Z",
-    confirmations: 6,
-    icon: Bitcoin
+    confirmations: 6
   },
   {
     id: "tx_002",
     hash: "0xabcd...efgh",
-    amount: "2.5 ETH",
+    amount: "2.5",
+    currency: "ETH",
     usdValue: "$5,678.90",
-    currency: "Ethereum",
     network: "Ethereum",
     status: "pending",
-    type: "payment",
+    type: "incoming",
     customer: "user@test.com",
     invoice: "INV-002",
     timestamp: "2024-01-15T10:25:00Z",
-    confirmations: 2,
-    icon: Ethereum
+    confirmations: 2
   },
   {
     id: "tx_003",
     hash: "0x9876...5432",
-    amount: "1000 USDT",
-    usdValue: "$1,000.00",
+    amount: "1000",
     currency: "USDT",
+    usdValue: "$1,000.00",
     network: "Ethereum",
-    status: "completed",
-    type: "payment",
+    status: "confirmed",
+    type: "incoming",
     customer: "merchant@business.com",
     invoice: "INV-003",
     timestamp: "2024-01-15T09:45:00Z",
-    confirmations: 12,
-    icon: DollarSign
+    confirmations: 12
   },
   {
     id: "tx_004",
     hash: "0xdef0...1234",
-    amount: "0.5 BNB",
-    usdValue: "$156.78",
+    amount: "0.5",
     currency: "BNB",
+    usdValue: "$156.78",
     network: "BSC",
     status: "failed",
-    type: "payment",
+    type: "incoming",
     customer: "failed@payment.com",
     invoice: "INV-004",
     timestamp: "2024-01-15T09:15:00Z",
-    confirmations: 0,
-    icon: DollarSign
+    confirmations: 0
+  },
+  {
+    id: "tx_005",
+    hash: "0x555...999",
+    amount: "50",
+    currency: "MATIC",
+    usdValue: "$45.50",
+    network: "Polygon",
+    status: "confirmed",
+    type: "incoming",
+    customer: "polygon@user.com",
+    invoice: "INV-005",
+    timestamp: "2024-01-15T08:30:00Z",
+    confirmations: 8
   }
 ]
-
-const statusColors = {
-  completed: "bg-green-100 text-green-800",
-  pending: "bg-yellow-100 text-yellow-800",
-  failed: "bg-red-100 text-red-800"
-}
 
 export default function TransactionsPage() {
   const [filter, setFilter] = useState("all")
@@ -94,74 +97,82 @@ export default function TransactionsPage() {
     const matchesSearch = searchTerm === "" || 
       tx.hash.toLowerCase().includes(searchTerm.toLowerCase()) ||
       tx.customer.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      tx.invoice.toLowerCase().includes(searchTerm.toLowerCase())
+      tx.invoice.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      tx.currency.toLowerCase().includes(searchTerm.toLowerCase())
     
     return matchesFilter && matchesSearch
   })
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="space-y-8">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900">Transactions</h1>
-          <p className="text-gray-600">Monitor all payment transactions and their status</p>
+          <h1 className="text-4xl font-bold text-foreground">Transaction History</h1>
+          <p className="text-muted-foreground text-lg mt-2">Monitor all payment transactions and their status</p>
         </div>
-        <div className="flex space-x-2">
-          <Button variant="outline">
-            <Download className="w-4 h-4 mr-2" />
+        <div className="flex items-center gap-3">
+          <Button variant="outline" size="sm" className="gap-2">
+            <BusinessIcons.Download className="w-4 h-4" />
             Export
           </Button>
-          <Button variant="outline">
-            <Calendar className="w-4 h-4 mr-2" />
+          <Button variant="outline" size="sm" className="gap-2">
+            <BusinessIcons.Filter className="w-4 h-4" />
             Date Range
           </Button>
         </div>
       </div>
 
       {/* Filters */}
-      <Card>
+      <Card className="border-0 shadow-lg">
         <CardContent className="p-6">
-          <div className="flex flex-col md:flex-row gap-4">
+          <div className="flex flex-col lg:flex-row gap-6">
             <div className="flex-1">
               <div className="relative">
-                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
-                <input
+                <BusinessIcons.Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-5 h-5" />
+                <Input
                   type="text"
-                  placeholder="Search by hash, customer, or invoice..."
-                  className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  placeholder="Search by hash, customer, invoice, or currency..."
+                  className="pl-10 h-11 text-base"
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                 />
               </div>
             </div>
-            <div className="flex space-x-2">
+            <div className="flex flex-wrap gap-2">
               <Button
                 variant={filter === "all" ? "default" : "outline"}
                 onClick={() => setFilter("all")}
                 size="sm"
+                className="min-w-[80px]"
               >
                 All
               </Button>
               <Button
-                variant={filter === "completed" ? "default" : "outline"}
-                onClick={() => setFilter("completed")}
+                variant={filter === "confirmed" ? "default" : "outline"}
+                onClick={() => setFilter("confirmed")}
                 size="sm"
+                className="min-w-[80px] gap-1"
               >
-                Completed
+                <StatusIcons.Success className="w-3 h-3" />
+                Confirmed
               </Button>
               <Button
                 variant={filter === "pending" ? "default" : "outline"}
                 onClick={() => setFilter("pending")}
                 size="sm"
+                className="min-w-[80px] gap-1"
               >
+                <StatusIcons.Pending className="w-3 h-3" />
                 Pending
               </Button>
               <Button
                 variant={filter === "failed" ? "default" : "outline"}
                 onClick={() => setFilter("failed")}
                 size="sm"
+                className="min-w-[80px] gap-1"
               >
+                <StatusIcons.Error className="w-3 h-3" />
                 Failed
               </Button>
             </div>
@@ -169,85 +180,108 @@ export default function TransactionsPage() {
         </CardContent>
       </Card>
 
-      {/* Transactions Table */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Transaction History</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead>
-                <tr className="border-b">
-                  <th className="text-left py-3 px-4 font-medium text-gray-500">Transaction</th>
-                  <th className="text-left py-3 px-4 font-medium text-gray-500">Amount</th>
-                  <th className="text-left py-3 px-4 font-medium text-gray-500">Customer</th>
-                  <th className="text-left py-3 px-4 font-medium text-gray-500">Status</th>
-                  <th className="text-left py-3 px-4 font-medium text-gray-500">Date</th>
-                  <th className="text-left py-3 px-4 font-medium text-gray-500">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredTransactions.map((tx) => (
-                  <tr key={tx.id} className="border-b hover:bg-gray-50">
-                    <td className="py-4 px-4">
-                      <div className="flex items-center space-x-3">
-                        <div className="p-2 bg-gray-50 rounded-full">
-                          <tx.icon className="w-5 h-5 text-gray-600" />
-                        </div>
-                        <div>
-                          <p className="font-medium text-gray-900">{tx.hash}</p>
-                          <p className="text-sm text-gray-500">{tx.network}</p>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="py-4 px-4">
-                      <div>
-                        <p className="font-medium text-gray-900">{tx.amount}</p>
-                        <p className="text-sm text-gray-500">{tx.usdValue}</p>
-                      </div>
-                    </td>
-                    <td className="py-4 px-4">
-                      <div>
-                        <p className="font-medium text-gray-900">{tx.customer}</p>
-                        <p className="text-sm text-gray-500">{tx.invoice}</p>
-                      </div>
-                    </td>
-                    <td className="py-4 px-4">
-                      <div className="flex flex-col space-y-1">
-                        <Badge className={statusColors[tx.status as keyof typeof statusColors]}>
-                          {tx.status}
-                        </Badge>
-                        {tx.status === "completed" && (
-                          <span className="text-xs text-gray-500">{tx.confirmations} confirmations</span>
-                        )}
-                        {tx.status === "pending" && (
-                          <span className="text-xs text-gray-500">{tx.confirmations}/6 confirmations</span>
-                        )}
-                      </div>
-                    </td>
-                    <td className="py-4 px-4">
-                      <p className="text-sm text-gray-900">
-                        {new Date(tx.timestamp).toLocaleDateString()}
-                      </p>
-                      <p className="text-xs text-gray-500">
-                        {new Date(tx.timestamp).toLocaleTimeString()}
-                      </p>
-                    </td>
-                    <td className="py-4 px-4">
-                      <Button variant="ghost" size="sm">
-                        <ExternalLink className="w-4 h-4" />
-                      </Button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+      {/* Transactions List */}
+      <Card className="border-0 shadow-lg">
+        <CardHeader className="pb-4">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-xl font-bold">Recent Transactions</CardTitle>
+            <div className="text-sm text-muted-foreground">
+              {filteredTransactions.length} of {transactions.length} transactions
+            </div>
           </div>
-          
-          {filteredTransactions.length === 0 && (
-            <div className="text-center py-8">
-              <p className="text-gray-500">No transactions found matching your criteria.</p>
+        </CardHeader>
+        <CardContent className="p-0">
+          {filteredTransactions.length > 0 ? (
+            <div className="divide-y divide-border">
+              {filteredTransactions.map((tx) => {
+                const statusColors = getStatusColors(tx.status)
+                return (
+                  <div key={tx.id} className="p-6 hover:bg-muted/30 transition-colors group">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-4 flex-1">
+                        {/* Transaction Direction Icon */}
+                        <div className="w-12 h-12 rounded-xl bg-green-100 dark:bg-green-900/20 flex items-center justify-center">
+                          <ArrowIcons.Down className="w-6 h-6 text-green-600 dark:text-green-400" />
+                        </div>
+                        
+                        {/* Crypto Icon and Details */}
+                        <div className="flex items-center gap-4 flex-1">
+                          <div className="p-2 rounded-lg bg-muted/50">
+                            {getCryptoIcon(tx.currency, { className: "w-6 h-6" })}
+                          </div>
+                          
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-3 mb-1">
+                              <h3 className="font-bold text-foreground text-lg">
+                                {tx.amount} {tx.currency}
+                              </h3>
+                              <Badge 
+                                variant="secondary" 
+                                className={`${statusColors.bg} ${statusColors.text} ${statusColors.border} border font-medium text-xs`}
+                              >
+                                {tx.status.charAt(0).toUpperCase() + tx.status.slice(1)}
+                              </Badge>
+                            </div>
+                            
+                            <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-4 text-sm text-muted-foreground">
+                              <span className="font-medium">{tx.usdValue}</span>
+                              <span className="hidden sm:inline">•</span>
+                              <span className="font-mono">{tx.hash}</span>
+                              <span className="hidden sm:inline">•</span>
+                              <span>{tx.network}</span>
+                            </div>
+                            
+                            <div className="flex items-center gap-4 mt-2 text-xs text-muted-foreground">
+                              <span>{tx.invoice}</span>
+                              <span>•</span>
+                              <span>{tx.customer}</span>
+                              <span>•</span>
+                              <span>{new Date(tx.timestamp).toLocaleString()}</span>
+                              {(tx.status === 'confirmed' || tx.status === 'pending') && (
+                                <>
+                                  <span>•</span>
+                                  <span className="flex items-center gap-1">
+                                    <StatusIcons.Shield className="w-3 h-3" />
+                                    {tx.confirmations} confirmations
+                                  </span>
+                                </>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                      
+                      {/* Action Button */}
+                      <Button 
+                        variant="ghost" 
+                        size="sm" 
+                        className="ml-4 opacity-0 group-hover:opacity-100 transition-opacity"
+                      >
+                        <BusinessIcons.View className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          ) : (
+            <div className="text-center py-16">
+              <div className="w-16 h-16 mx-auto mb-6 rounded-2xl bg-muted/50 flex items-center justify-center">
+                <BusinessIcons.Search className="w-8 h-8 text-muted-foreground" />
+              </div>
+              <h3 className="text-xl font-semibold text-foreground mb-3">No transactions found</h3>
+              <p className="text-muted-foreground max-w-md mx-auto">
+                {searchTerm || filter !== "all" 
+                  ? "Try adjusting your search terms or filters to find transactions."
+                  : "Start accepting cryptocurrency payments to see transactions here."
+                }
+              </p>
+              {(!searchTerm && filter === "all") && (
+                <Button className="mt-6 gap-2">
+                  <BusinessIcons.Add className="w-4 h-4" />
+                  Create Invoice
+                </Button>
+              )}
             </div>
           )}
         </CardContent>

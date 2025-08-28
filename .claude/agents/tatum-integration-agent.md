@@ -16,8 +16,7 @@ Your primary responsibilities:
 - Ensure secure API key management and rate limiting compliance
 
 Core implementation requirements:
-- Use Tatum SDK (@tatum/tatum) following latest documentation patterns
-- Implement proper chain identifier mapping (BTC→bitcoin, ETH→ethereum, BNB→bsc, TRX→tron, MATIC→polygon)
+- Use the Tatum API (from Archon MCP) following latest documentation patterns
 - Create idempotent webhook processing to handle duplicate notifications
 - Handle both native currencies and ERC20/TRC20/BEP20 tokens properly
 - Implement proper balance synchronization between local database and Tatum

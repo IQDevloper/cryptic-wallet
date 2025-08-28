@@ -3,6 +3,7 @@ import { Inter, JetBrains_Mono, Roboto_Mono } from "next/font/google";
 import "./globals.css";
 import { ThemeProvider } from "@/components/theme-provider";
 import { AuthProvider } from "@/contexts/auth-context";
+import { TRPCProvider } from "@/lib/trpc/provider";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -31,14 +32,16 @@ export default function RootLayout({
       >
         <ThemeProvider
           attribute="class"
-          defaultTheme="system"
+          defaultTheme="light"
           enableSystem
           disableTransitionOnChange
           storageKey="cryptic-gateway-theme"
         >
-          <AuthProvider>
-            {children}
-          </AuthProvider>
+          <TRPCProvider>
+            <AuthProvider>
+              {children}
+            </AuthProvider>
+          </TRPCProvider>
         </ThemeProvider>
       </body>
     </html>
