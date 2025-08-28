@@ -14,7 +14,6 @@ import {
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
 import { useRouter } from 'next/navigation'
-import { gql, useMutation } from '@apollo/client'
 import { toast } from 'sonner'
 import { Loader2 } from 'lucide-react'
 import Image from 'next/image'
@@ -28,27 +27,32 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-
-import { Currency } from '@/graphql/generated/graphql'
-import { client } from '@/lib/apollo-client'
-import { GET_MERCHANT_INVOICES } from '../merchants/merchant-invoices'
+import { trpc } from '@/lib/trpc/client'
 
 const formSchema = z.object({
   amount: z.coerce.number()
     .min(0.01, 'Amount must be greater than 0')
     .nonnegative('Amount cannot be negative'),
-  acceptedCurrencies: z.array(z.string()).min(1, 'Select at least one currency'),
-  title: z.string().optional(),
+  currency: z.string().min(1, 'Select a currency'),
   description: z.string().optional(),
+  orderId: z.string().optional(),
+  notifyUrl: z.string().url().optional().or(z.literal('')),
+  redirectUrl: z.string().url().optional().or(z.literal('')),
+  returnUrl: z.string().url().optional().or(z.literal('')),
 })
 
-const CREATE_INVOICE = gql`
-  mutation CreateInvoice($input: CreateInvoiceInput!) {
-    createInvoice(input: $input) {
-      id
-    }
+interface Currency {
+  id: string
+  name: string
+  code: string
+  symbol?: string
+  imageUrl: string | null
+  network: {
+    name: string
+    code: string
   }
-`
+  price?: number
+}
 
 interface CreateInvoiceFormProps {
   currencies: Currency[]
@@ -56,64 +60,55 @@ interface CreateInvoiceFormProps {
 }
 
 export function CreateInvoiceForm({ currencies, merchantId }: CreateInvoiceFormProps) {
-  useCsrf()
   const router = useRouter()
-  const [createInvoice, { loading }] = useMutation(CREATE_INVOICE)
+  const utils = trpc.useUtils()
+  const createInvoiceMutation = trpc.invoice.create.useMutation({
+    onSuccess: () => {
+      utils.invoice.list.invalidate()
+      toast.success('Invoice created successfully')
+      router.push(`/dashboard/merchants/${merchantId}?tab=invoices`)
+    },
+    onError: (error) => {
+      toast.error(error.message || 'Failed to create invoice')
+    },
+  })
 
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
     defaultValues: {
       amount: 0,
-      acceptedCurrencies: currencies.map(c => c.code),
-      title: '',
+      currency: currencies.length > 0 ? currencies[0].code : '',
       description: '',
+      orderId: '',
+      notifyUrl: '',
+      redirectUrl: '',
+      returnUrl: '',
     },
   })
 
-  const handleCurrencySelection = React.useCallback((value: string, field: any) => {
-    if (value === 'all') {
-      field.onChange(currencies.map(c => c.code));
-    } else if (value === 'none') {
-      field.onChange([]);
-    } else {
-      const values = new Set(field.value || []);
-      if (values.has(value)) {
-        values.delete(value);
-      } else {
-        values.add(value);
-      }
-      field.onChange(Array.from(values));
-    }
-  }, [currencies]);
+  const [selectedCurrency, setSelectedCurrency] = React.useState<Currency | undefined>(
+    currencies.length > 0 ? currencies[0] : undefined
+  )
+
+  const handleCurrencyChange = React.useCallback((value: string) => {
+    const currency = currencies.find(c => c.code === value)
+    setSelectedCurrency(currency)
+  }, [currencies])
 
   async function onSubmit(values: z.infer<typeof formSchema>) {
-    try {
-      const expiresAt = new Date(Date.now() + 3 * 60 * 60 * 1000)
-      await createInvoice({
-        variables: {
-          input: {
-            ...values,
-            merchantId,
-            expiresAt,
-            fixedPrice: true,
-          },
-        },
-      })
-      await client.refetchQueries({
-        include: [GET_MERCHANT_INVOICES],
-      })
-
-      toast({
-        title: 'Success',
-        description: 'Invoice created successfully'
-      })
-      router.push(`/dashboard/merchants/${merchantId}?tab=invoices`)
-    } catch (error) {
-      toast({
-        title: 'Error',
-        description: error instanceof Error ? error.message : 'Failed to create invoice',
-      })
-    }
+    // Convert amount to string format as required by the API
+    const formattedAmount = values.amount.toFixed(18).replace(/\.?0+$/, '')
+    
+    await createInvoiceMutation.mutateAsync({
+      amount: formattedAmount,
+      currency: values.currency,
+      description: values.description || undefined,
+      orderId: values.orderId || undefined,
+      expiresIn: 10800, // 3 hours in seconds
+      notifyUrl: values.notifyUrl || undefined,
+      redirectUrl: values.redirectUrl || undefined,
+      returnUrl: values.returnUrl || undefined,
+    })
   }
 
   return (
@@ -145,42 +140,39 @@ export function CreateInvoiceForm({ currencies, merchantId }: CreateInvoiceFormP
 
         <FormField
           control={form.control}
-          name="acceptedCurrencies"
+          name="currency"
           render={({ field }) => (
             <FormItem>
               <FormLabel>Accept Payment In</FormLabel>
               <Select
-                onValueChange={(value) => handleCurrencySelection(value, field)}
+                onValueChange={(value) => {
+                  field.onChange(value)
+                  handleCurrencyChange(value)
+                }}
+                defaultValue={field.value}
               >
                 <FormControl>
                   <SelectTrigger className="w-full">
-                    <SelectValue>
-                      {field.value?.length === currencies.length
-                        ? "All Currencies Selected"
-                        : field.value?.length === 0
-                          ? "Select Currencies"
-                          : `${field.value?.length} Currencies Selected`}
+                    <SelectValue placeholder="Select a currency">
+                      {selectedCurrency && (
+                        <div className="flex items-center gap-2">
+                          {selectedCurrency.imageUrl && (
+                            <Image
+                              src={selectedCurrency.imageUrl}
+                              alt={selectedCurrency.code}
+                              width={20}
+                              height={20}
+                              className="rounded-full"
+                            />
+                          )}
+                          <span>{selectedCurrency.name}</span>
+                          <span className="text-muted-foreground">({selectedCurrency.code})</span>
+                        </div>
+                      )}
                     </SelectValue>
                   </SelectTrigger>
                 </FormControl>
                 <SelectContent className="max-h-[300px]">
-                  <div className="sticky top-0 bg-background border-b p-2 space-y-2">
-                    <SelectItem value="all" className="font-medium">
-                      <div className="flex items-center gap-2">
-                        <Check className={cn(
-                          "h-4 w-4",
-                          field.value?.length === currencies.length ? "opacity-100" : "opacity-0"
-                        )} />
-                        <span>Select All Currencies</span>
-                      </div>
-                    </SelectItem>
-                    <SelectItem value="none" className="font-medium text-destructive">
-                      <div className="flex items-center gap-2">
-                        <X className="h-4 w-4" />
-                        <span>Clear Selection</span>
-                      </div>
-                    </SelectItem>
-                  </div>
                   <div className="p-2">
                     {currencies.map((currency) => (
                       <SelectItem
@@ -189,7 +181,7 @@ export function CreateInvoiceForm({ currencies, merchantId }: CreateInvoiceFormP
                         className="my-1 cursor-pointer hover:bg-accent rounded-md"
                       >
                         <div className="flex items-center gap-2 py-1">
-                          <div className="flex items-center gap-2 flex-1">
+                          {currency.imageUrl && (
                             <Image
                               src={currency.imageUrl}
                               alt={currency.code}
@@ -197,77 +189,52 @@ export function CreateInvoiceForm({ currencies, merchantId }: CreateInvoiceFormP
                               height={24}
                               className="rounded-full"
                             />
-                            <div className="flex flex-col">
-                              <span className="font-medium">{currency.name}</span>
-                              <span className="text-xs text-muted-foreground">{currency.network}</span>
-                            </div>
+                          )}
+                          <div className="flex flex-col flex-1">
+                            <span className="font-medium">{currency.name}</span>
+                            <span className="text-xs text-muted-foreground">{currency.network.name}</span>
                           </div>
-                          <Check
-                            className={cn(
-                              "ml-auto h-4 w-4 flex-shrink-0",
-                              field.value?.includes(currency.code) ? "opacity-100" : "opacity-0"
-                            )}
-                          />
+                          {currency.price && (
+                            <span className="text-xs text-muted-foreground">
+                              ${currency.price.toFixed(2)}
+                            </span>
+                          )}
                         </div>
                       </SelectItem>
                     ))}
                   </div>
                 </SelectContent>
               </Select>
-
-              {/* Selected Currencies Display */}
-              <div className="mt-2 flex flex-wrap gap-2">
-                {field.value?.map((code) => {
-                  const currency = currencies.find(c => c.code === code);
-                  if (!currency) return null;
-
-                  return (
-                    <div
-                      key={code}
-                      className="flex items-center gap-2 bg-secondary px-3 py-1.5 rounded-full text-sm hover:bg-secondary/80 transition-colors"
-                    >
-                      <Image
-                        src={currency.imageUrl}
-                        alt={currency.code}
-                        width={16}
-                        height={16}
-                        className="rounded-full"
-                      />
-                      <span>{currency.name}</span>
-                      <button
-                        type="button"
-                        className="hover:text-destructive transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1 rounded-full"
-                        onClick={() => handleCurrencySelection(code, field)}
-                      >
-                        <X className="h-3 w-3" />
-                      </button>
-                    </div>
-                  );
-                })}
-              </div>
-
               <FormMessage />
-              {field.value?.length === 0 && (
-                <p className="text-sm text-destructive mt-1">
-                  Please select at least one currency
-                </p>
+              {selectedCurrency && (
+                <div className="mt-2 p-3 bg-secondary/50 rounded-lg">
+                  <div className="flex items-center gap-2 text-sm">
+                    <span className="text-muted-foreground">Network:</span>
+                    <span className="font-medium">{selectedCurrency.network.name}</span>
+                  </div>
+                  {selectedCurrency.price && form.watch('amount') > 0 && (
+                    <div className="flex items-center gap-2 text-sm mt-1">
+                      <span className="text-muted-foreground">Estimated:</span>
+                      <span className="font-medium">
+                        {(form.watch('amount') / selectedCurrency.price).toFixed(8)} {selectedCurrency.code}
+                      </span>
+                    </div>
+                  )}
+                </div>
               )}
-              <p className="text-xs text-muted-foreground mt-1">
-                Customer can pay using any of the selected currencies
-              </p>
             </FormItem>
           )}
         />
 
         <FormField
           control={form.control}
-          name="title"
+          name="orderId"
           render={({ field }) => (
             <FormItem>
-              <FormLabel>Title (Optional)</FormLabel>
+              <FormLabel>Order ID (Optional)</FormLabel>
               <FormControl>
                 <Input
-                  placeholder="e.g., Monthly Service Payment"
+                  placeholder="e.g., ORD-123456"
                   {...field}
                 />
               </FormControl>
@@ -296,12 +263,79 @@ export function CreateInvoiceForm({ currencies, merchantId }: CreateInvoiceFormP
           )}
         />
 
+        <div className="space-y-4 pt-4 border-t">
+          <h3 className="text-sm font-medium">Advanced Options (Optional)</h3>
+          
+          <FormField
+            control={form.control}
+            name="notifyUrl"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Webhook URL</FormLabel>
+                <FormControl>
+                  <Input
+                    type="url"
+                    placeholder="https://your-server.com/webhook"
+                    {...field}
+                  />
+                </FormControl>
+                <p className="text-xs text-muted-foreground">
+                  URL to receive payment notifications
+                </p>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+
+          <FormField
+            control={form.control}
+            name="redirectUrl"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Success Redirect URL</FormLabel>
+                <FormControl>
+                  <Input
+                    type="url"
+                    placeholder="https://your-site.com/success"
+                    {...field}
+                  />
+                </FormControl>
+                <p className="text-xs text-muted-foreground">
+                  Where to redirect after successful payment
+                </p>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+
+          <FormField
+            control={form.control}
+            name="returnUrl"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Cancel Return URL</FormLabel>
+                <FormControl>
+                  <Input
+                    type="url"
+                    placeholder="https://your-site.com/cancel"
+                    {...field}
+                  />
+                </FormControl>
+                <p className="text-xs text-muted-foreground">
+                  Where to return if payment is cancelled
+                </p>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+        </div>
+
         <Button
           type="submit"
           className="w-full"
-          disabled={loading || form.watch('acceptedCurrencies').length === 0}
+          disabled={createInvoiceMutation.isPending || !form.watch('currency')}
         >
-          {loading ? (
+          {createInvoiceMutation.isPending ? (
             <>
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               Creating...

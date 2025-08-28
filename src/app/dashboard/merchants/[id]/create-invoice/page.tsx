@@ -11,7 +11,6 @@ import {
 import Link from 'next/link'
 import getMerchant from '../actions/getMerchant'
 import { prisma } from '@/lib/prisma'
-import { fetchPricesFromAPI } from '@/services/price-provider'
 
 export default async function CreateInvoicePage({
   params,
@@ -21,33 +20,28 @@ export default async function CreateInvoicePage({
   const { id: merchantId } = await params
   const merchant = await getMerchant(merchantId)
   
-  // Get currencies with wallet data
+  // Get all active currencies
   const currencies = await prisma.currency.findMany({
     where: {
-      wallets: {
-        some: {
-          merchantId: merchant.id
-        }
-      }
+      isActive: true
     },
     select: {
       id: true,
       name: true,
       code: true,
+      symbol: true,
       imageUrl: true,
-      network: true
+      network: {
+        select: {
+          name: true,
+          code: true
+        }
+      }
+    },
+    orderBy: {
+      name: 'asc'
     }
   })
-
-  // Get currency prices from external API
-  const currencyCodes = currencies.map(c => c.code)
-  const prices = await fetchPricesFromAPI(currencyCodes)
-
-  // Merge prices with currency data
-  const currenciesWithPrices = currencies.map(currency => ({
-    ...currency,
-    price: prices[currency.code] || 0
-  }))
 
   return (
     <div className="flex flex-col gap-4">
@@ -80,7 +74,7 @@ export default async function CreateInvoicePage({
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <CreateInvoiceForm currencies={currenciesWithPrices} merchantId={merchantId} />
+            <CreateInvoiceForm currencies={currencies} merchantId={merchantId} />
           </CardContent>
         </Card>
       </div>
