@@ -1,5 +1,4 @@
 import { z } from 'zod'
-import { TRPCError } from '@trpc/server'
 import { createTRPCRouter, userAuthenticatedProcedure, merchantAuthenticatedProcedure, userOwnsMerchantProcedure } from '../procedures'
 
 export const merchantRouter = createTRPCRouter({
@@ -153,49 +152,22 @@ export const merchantRouter = createTRPCRouter({
     }),
 
   // Get merchant by ID
-  getById: userAuthenticatedProcedure
+  getById: userOwnsMerchantProcedure
     .input(z.object({ merchantId: z.string().cuid() }))
-    .query(async ({ ctx, input }) => {
-      const merchant = await ctx.prisma.merchant.findFirst({
-        where: {
-          id: input.merchantId,
-          userId: ctx.user.userId,
-        },
-      })
-
-      if (!merchant) {
-        throw new TRPCError({
-          code: 'NOT_FOUND',
-          message: 'Merchant not found',
-        })
-      }
-
-      return merchant
+    .query(async ({ ctx }) => {
+      // Merchant is already available from userOwnsMerchantProcedure
+      return ctx.merchant
     }),
 
   // Regenerate API key
-  regenerateApiKey: userAuthenticatedProcedure
+  regenerateApiKey: userOwnsMerchantProcedure
     .input(z.object({ merchantId: z.string().cuid() }))
-    .mutation(async ({ ctx, input }) => {
-      const merchant = await ctx.prisma.merchant.findFirst({
-        where: {
-          id: input.merchantId,
-          userId: ctx.user.userId,
-        },
-      })
-
-      if (!merchant) {
-        throw new TRPCError({
-          code: 'NOT_FOUND',
-          message: 'Merchant not found',
-        })
-      }
-
+    .mutation(async ({ ctx }) => {
       const crypto = await import('crypto')
       const newApiKey = 'mk_' + crypto.randomBytes(32).toString('hex')
 
       const updatedMerchant = await ctx.prisma.merchant.update({
-        where: { id: input.merchantId },
+        where: { id: ctx.merchant.id },
         data: { apiKey: newApiKey },
       })
 
@@ -268,7 +240,7 @@ export const merchantRouter = createTRPCRouter({
       }
     }),
 
-  updateWebhookUrl: userAuthenticatedProcedure
+  updateWebhookUrl: userOwnsMerchantProcedure
     .input(
       z.object({
         merchantId: z.string(),
@@ -276,30 +248,15 @@ export const merchantRouter = createTRPCRouter({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      // Verify the merchant belongs to the authenticated user
-      const merchant = await ctx.prisma.merchant.findFirst({
-        where: {
-          id: input.merchantId,
-          userId: ctx.user.userId,
-        },
-      })
-
-      if (!merchant) {
-        throw new TRPCError({
-          code: 'NOT_FOUND',
-          message: 'Merchant not found',
-        })
-      }
-
       const updatedMerchant = await ctx.prisma.merchant.update({
-        where: { id: input.merchantId },
+        where: { id: ctx.merchant.id },
         data: { webhookUrl: input.webhookUrl },
       })
 
       return updatedMerchant
     }),
 
-  update: userAuthenticatedProcedure
+  update: userOwnsMerchantProcedure
     .input(
       z.object({
         merchantId: z.string(),
@@ -310,32 +267,17 @@ export const merchantRouter = createTRPCRouter({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      const { merchantId, ...updateData } = input
+      const { merchantId: _, ...updateData } = input
       
-      // Verify the merchant belongs to the authenticated user
-      const merchant = await ctx.prisma.merchant.findFirst({
-        where: {
-          id: merchantId,
-          userId: ctx.user.userId,
-        },
-      })
-
-      if (!merchant) {
-        throw new TRPCError({
-          code: 'NOT_FOUND',
-          message: 'Merchant not found',
-        })
-      }
-
       const updatedMerchant = await ctx.prisma.merchant.update({
-        where: { id: merchantId },
+        where: { id: ctx.merchant.id },
         data: updateData,
       })
 
       return updatedMerchant
     }),
 
-  updateStatus: userAuthenticatedProcedure
+  updateStatus: userOwnsMerchantProcedure
     .input(
       z.object({
         merchantId: z.string(),
@@ -343,23 +285,8 @@ export const merchantRouter = createTRPCRouter({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      // Verify the merchant belongs to the authenticated user
-      const merchant = await ctx.prisma.merchant.findFirst({
-        where: {
-          id: input.merchantId,
-          userId: ctx.user.userId,
-        },
-      })
-
-      if (!merchant) {
-        throw new TRPCError({
-          code: 'NOT_FOUND',
-          message: 'Merchant not found',
-        })
-      }
-
       const updatedMerchant = await ctx.prisma.merchant.update({
-        where: { id: input.merchantId },
+        where: { id: ctx.merchant.id },
         data: { isActive: input.isActive },
       })
 
@@ -372,10 +299,7 @@ export const merchantRouter = createTRPCRouter({
         merchantId: z.string(),
       })
     )
-    .query(async ({ ctx, input }) => {
-      // Merchant ownership already verified by userOwnsMerchantProcedure
-      // ctx.merchant is now available and guaranteed to belong to the user
-      
+    .query(async ({ ctx }) => {
       // Get merchant wallets with balances
       const wallets = await ctx.prisma.wallet.findMany({
         where: {
@@ -423,7 +347,7 @@ export const merchantRouter = createTRPCRouter({
       return balances.sort((a, b) => (b.amount * b.price) - (a.amount * a.price))
     }),
 
-  invoices: userAuthenticatedProcedure
+  invoices: userOwnsMerchantProcedure
     .input(
       z.object({
         merchantId: z.string(),
@@ -434,24 +358,9 @@ export const merchantRouter = createTRPCRouter({
       })
     )
     .query(async ({ ctx, input }) => {
-      // Verify the merchant belongs to the authenticated user
-      const merchant = await ctx.prisma.merchant.findFirst({
-        where: {
-          id: input.merchantId,
-          userId: ctx.user.userId,
-        },
-      })
-
-      if (!merchant) {
-        throw new TRPCError({
-          code: 'NOT_FOUND',
-          message: 'Merchant not found',
-        })
-      }
-
       const skip = (input.page - 1) * input.limit
       const where: any = {
-        merchantId: input.merchantId,
+        merchantId: ctx.merchant.id,
       }
 
       if (input.search) {
