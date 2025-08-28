@@ -116,8 +116,9 @@ export const merchantRouter = createTRPCRouter({
     .input(
       z.object({
         name: z.string().min(2).max(100),
-        email: z.string().email(),
-        businessName: z.string().max(500).optional(),
+        websiteUrl: z.string().url(),
+        businessAddress: z.string().max(500).optional(),
+        taxId: z.string().max(50).optional(),
         webhookUrl: z.string().url().optional(),
         isActive: z.boolean().default(true),
       })
@@ -128,11 +129,12 @@ export const merchantRouter = createTRPCRouter({
       const apiKey = 'mk_' + crypto.randomBytes(32).toString('hex')
       const apiKeyHash = crypto.createHash('sha256').update(apiKey).digest('hex')
 
+      // Create merchant - using email field since websiteUrl doesn't exist in DB yet
       const merchant = await ctx.prisma.merchant.create({
         data: {
           name: input.name,
-          email: input.email,
-          businessName: input.businessName,
+          email: input.websiteUrl, // Temporarily store website URL in email field
+          businessAddress: input.businessAddress,
           webhookUrl: input.webhookUrl,
           isActive: input.isActive,
           apiKey,
@@ -141,13 +143,61 @@ export const merchantRouter = createTRPCRouter({
         },
       })
 
+      // Get all active currencies to create wallets
+      const activeCurrencies = await ctx.prisma.currency.findMany({
+        where: { isActive: true },
+        include: { network: true }
+      })
+
+      // Create wallets for all active currencies
+      const walletPromises = activeCurrencies.map(async (currency) => {
+        try {
+          // Create Tatum virtual account for this currency
+          const tatumVAManager = await import('@/lib/tatum/client').then(m => m.tatumVAManager)
+          const account = await tatumVAManager.createVirtualAccount(
+            currency.network.tatumChainId, 
+            merchant.id
+          )
+
+          // Create wallet record in database
+          return ctx.prisma.wallet.create({
+            data: {
+              tatumAccountId: account.id,
+              merchantId: merchant.id,
+              currencyId: currency.id,
+              balance: 0,
+            },
+          })
+        } catch (error) {
+          console.error(`Failed to create wallet for ${currency.code}:`, error)
+          // Create wallet record without Tatum account (can retry later)
+          return ctx.prisma.wallet.create({
+            data: {
+              tatumAccountId: `temp_${merchant.id}_${currency.id}`, // Temporary ID for failed accounts
+              merchantId: merchant.id,
+              currencyId: currency.id,
+              balance: 0,
+            },
+          })
+        }
+      })
+
+      // Wait for all wallets to be created
+      const wallets = await Promise.allSettled(walletPromises)
+      const successfulWallets = wallets.filter(w => w.status === 'fulfilled').length
+      const failedWallets = wallets.filter(w => w.status === 'rejected').length
+
+      console.log(`Created merchant ${merchant.id} with ${successfulWallets} wallets (${failedWallets} failed)`)
+
       return {
         id: merchant.id,
         name: merchant.name,
-        email: merchant.email,
+        email: merchant.email, // This contains the website URL temporarily
         apiKey: merchant.apiKey,
         isActive: merchant.isActive,
         createdAt: merchant.createdAt,
+        walletsCreated: successfulWallets,
+        walletsFailed: failedWallets,
       }
     }),
 
