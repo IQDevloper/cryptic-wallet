@@ -64,6 +64,9 @@ model Merchant {
   user              User?             @relation(fields: [userId], references: [id])
   wallets           Wallet[]
   webhookDeliveries WebhookDelivery[]
+  merchantBalances  MerchantBalance[]
+  derivedAddresses  DerivedAddress[]
+  withdrawals       Withdrawal[]
 
   @@index([isActive])
   @@index([isVerified])
@@ -158,7 +161,7 @@ model Currency {
 
 model Wallet {
   id                String           @id @default(cuid())
-  tatumAccountId    String           @unique
+  tatumAccountId    String
   balance           Decimal          @default(0) @db.Decimal(36, 18)
   isActive          Boolean          @default(true)
   createdAt         DateTime         @default(now())
@@ -180,6 +183,7 @@ model Wallet {
   @@unique([merchantId, currencyId])
   @@index([merchantId])
   @@index([currencyId])
+  @@index([tatumAccountId])
   @@index([isActive])
   @@index([balance])
   @@index([lastBalanceUpdate])
@@ -200,6 +204,7 @@ model Invoice {
   updatedAt         DateTime          @updatedAt
   merchantId        String
   walletId          String
+  derivedAddressId  String?
   amountPaid        Decimal           @default(0) @db.Decimal(36, 18)
   confirmedAt       DateTime?
   customData        Json?
@@ -215,6 +220,7 @@ model Invoice {
   returnUrl         String?
   merchant          Merchant          @relation(fields: [merchantId], references: [id], onDelete: Cascade)
   wallet            Wallet            @relation(fields: [walletId], references: [id])
+  derivedAddress    DerivedAddress?   @relation(fields: [derivedAddressId], references: [id])
   transactions      Transaction[]
   webhookDeliveries WebhookDelivery[]
 
@@ -508,4 +514,116 @@ enum UserRole {
   ADMIN
   MERCHANT
   OPERATOR
+}
+
+enum GlobalWalletStatus {
+  ACTIVE
+  INACTIVE
+  MAINTENANCE
+}
+
+model GlobalHDWallet {
+  id                 String              @id @default(cuid())
+  currency           String              // "BTC", "ETH", "USDT"
+  network            String              // "bitcoin", "ethereum", "bsc", "tron"
+  contractAddress    String?             // NULL for native, contract address for tokens
+  mnemonicEncrypted  String              // Encrypted 24-word mnemonic phrase
+  xpub               String              // Extended public key for address derivation
+  encryptedPrivateKey String             // Encrypted master private key
+  derivationPath     String              // e.g., "m/44'/60'/0'/0" for Ethereum
+  nextAddressIndex   BigInt              @default(0) // Global counter for address derivation
+  totalPoolBalance   Decimal             @default(0) @db.Decimal(36, 18) // Total balance across all addresses
+  status             GlobalWalletStatus  @default(ACTIVE)
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+
+  // Relations
+  merchantBalances   MerchantBalance[]
+  derivedAddresses   DerivedAddress[]
+
+  @@unique([currency, network, contractAddress])
+  @@index([status])
+  @@index([currency])
+  @@index([network])
+  @@map("global_hd_wallets")
+}
+
+model MerchantBalance {
+  id             String        @id @default(cuid())
+  merchantId     String
+  globalWalletId String
+  balance        Decimal       @default(0) @db.Decimal(36, 18)       // Available balance
+  lockedBalance  Decimal       @default(0) @db.Decimal(36, 18)       // Locked for pending withdrawals
+  totalReceived  Decimal       @default(0) @db.Decimal(36, 18)       // Lifetime received
+  totalWithdrawn Decimal       @default(0) @db.Decimal(36, 18)       // Lifetime withdrawn
+  lastUpdated    DateTime      @default(now())
+  createdAt      DateTime      @default(now())
+
+  // Relations
+  merchant       Merchant      @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  globalWallet   GlobalHDWallet @relation(fields: [globalWalletId], references: [id], onDelete: Cascade)
+
+  @@unique([merchantId, globalWalletId])
+  @@index([merchantId])
+  @@index([globalWalletId])
+  @@index([balance])
+  @@map("merchant_balances")
+}
+
+model DerivedAddress {
+  id                String         @id @default(cuid())
+  globalWalletId    String
+  merchantId        String
+  address           String         @unique
+  derivationIndex   BigInt
+  currentBalance    Decimal        @default(0) @db.Decimal(36, 18)
+  assignedToInvoice String?        // NULL if not assigned, invoice ID if assigned
+  firstUsedAt       DateTime?
+  lastActivityAt    DateTime?
+  createdAt         DateTime       @default(now())
+
+  // Relations
+  globalWallet      GlobalHDWallet @relation(fields: [globalWalletId], references: [id], onDelete: Cascade)
+  merchant          Merchant       @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  invoices          Invoice[]
+
+  @@index([globalWalletId])
+  @@index([merchantId])
+  @@index([derivationIndex])
+  @@index([assignedToInvoice])
+  @@map("derived_addresses")
+}
+
+model Withdrawal {
+  id                String   @id @default(cuid())
+  merchantId        String
+  currency          String   // "USDT", "BTC", "ETH"
+  totalAmount       Decimal  @db.Decimal(36, 18)
+  targetNetwork     String   // Target network for withdrawal
+  targetAddress     String   // User's wallet address
+  status            WithdrawalStatus @default(PENDING)
+  withdrawalSources Json     // Array of {network: string, amount: number}
+  totalFees         Decimal  @db.Decimal(36, 18)
+  needsBridging     Boolean  @default(false)
+  transactions      Json?    // Array of blockchain transaction hashes
+  completedAt       DateTime?
+  failedReason      String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  // Relations
+  merchant          Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+
+  @@index([merchantId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("withdrawals")
+}
+
+enum WithdrawalStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  CANCELLED
 }

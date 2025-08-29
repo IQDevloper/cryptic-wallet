@@ -1,56 +1,45 @@
 'use client'
 
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Badge } from '@/components/ui/badge'
 import { trpc } from '@/lib/trpc/client'
-import Image from 'next/image'
 import { formatCurrency } from '@/lib/utils'
 
 
-export function MerchantOverview({ merchantId }: { merchantId: string }) {
-  const { data: balances, isLoading } = trpc.merchant.getBalances.useQuery({
-    merchantId,
-  })
+interface MerchantOverviewProps {
+  merchantId: string
+}
 
+export function MerchantOverview({ merchantId }: MerchantOverviewProps) {
+  const { data: balances, isLoading, error } = trpc.merchant.getBalances.useQuery({
+    merchantId
+  })
+  console.log('====================================');
+  console.log(balances);
+  console.log('====================================');
   if (isLoading) {
     return (
       <div className="space-y-4">
-        {/* Total Balance Skeleton */}
+        <Card>
+          <CardHeader>
+            <Skeleton className="h-6 w-32" />
+            <Skeleton className="h-4 w-48" />
+          </CardHeader>
+          <CardContent>
+            <Skeleton className="h-8 w-24 mb-2" />
+          </CardContent>
+        </Card>
+        
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <div>
-                <Skeleton className="h-4 w-[100px] mb-2" />
-                <Skeleton className="h-3 w-[150px]" />
-              </div>
-              <div className="flex items-center -space-x-2">
-                {[1, 2, 3].map((_, index) => (
-                  <Skeleton key={index} className="h-6 w-6 rounded-full" />
-                ))}
-              </div>
-            </CardHeader>
-            <CardContent>
-              <Skeleton className="h-8 w-[120px] mb-4" />
-              <div className="flex gap-2">
-                <Skeleton className="h-9 flex-1" />
-                <Skeleton className="h-9 flex-1" />
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-
-        {/* Individual Balances Skeleton */}
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {[1, 2, 3].map((_, index) => (
-            <Card key={index}>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <Skeleton className="h-4 w-[100px]" />
-                <Skeleton className="h-6 w-6 rounded-full" />
+          {[1, 2, 3, 4, 5, 6].map((i) => (
+            <Card key={i}>
+              <CardHeader>
+                <Skeleton className="h-4 w-16" />
               </CardHeader>
               <CardContent>
-                <Skeleton className="h-8 w-[120px] mb-2" />
-                <Skeleton className="h-4 w-[80px]" />
+                <Skeleton className="h-6 w-20 mb-2" />
+                <Skeleton className="h-4 w-16" />
               </CardContent>
             </Card>
           ))}
@@ -59,110 +48,102 @@ export function MerchantOverview({ merchantId }: { merchantId: string }) {
     )
   }
 
-  if (!balances || balances.length === 0) {
+  if (error) {
     return (
       <div className="text-center py-12">
-        <p className="text-muted-foreground">No wallets created yet</p>
+        <p className="text-red-500">Error loading balances: {error.message}</p>
       </div>
     )
   }
 
-  // Calculate total balance in USD
-  const totalBalance = balances.reduce((sum, balance) => {
-    return sum + (balance.amount * balance.price)
-  }, 0)
+  if (!balances || balances.length === 0) {
+    return (
+      <div className="text-center py-12">
+        <p className="text-muted-foreground">No balances available</p>
+      </div>
+    )
+  }
 
-  // Get currencies with non-zero balances for display
-  const activeBalances = balances.filter(b => b.amount > 0)
+  const totalValue = balances.reduce((sum, balance) => sum + balance.value, 0)
+  const activeBalances = balances.filter(b => b.balance > 0)
 
   return (
-    <div className="space-y-4">
-      {/* Total Balance Card */}
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-        <Card className="md:col-span-2 lg:col-span-1">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <div>
-              <CardTitle className="text-sm font-medium">Total Balance</CardTitle>
-              <p className="text-xs text-muted-foreground">All currencies combined</p>
-            </div>
-            <div className="flex items-center -space-x-2">
-              {activeBalances.slice(0, 3).map((balance) => (
-                balance.currency.imageUrl && (
-                  <Image
-                    key={balance.currency.code}
-                    src={balance.currency.imageUrl}
-                    alt={balance.currency.name}
-                    width={24}
-                    height={24}
-                    className="rounded-full border-2 border-background"
-                  />
-                )
-              ))}
-              {activeBalances.length > 3 && (
-                <div className="w-6 h-6 rounded-full bg-muted flex items-center justify-center text-xs border-2 border-background">
-                  +{activeBalances.length - 3}
-                </div>
-              )}
-            </div>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold mb-4">
-              {formatCurrency(totalBalance)}
-            </div>
-            <div className="flex gap-2">
-              <Button variant="outline" className="flex-1" size="sm">
-                Withdraw
-              </Button>
-              <Button variant="outline" className="flex-1" size="sm">
-                Convert
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
+    <div className="space-y-6">
+      {/* Total Balance */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Total Portfolio Value</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="text-3xl font-bold mb-2">
+            {formatCurrency(totalValue)}
+          </div>
+          <p className="text-sm text-muted-foreground">
+            {activeBalances.length} currencies with balance
+          </p>
+        </CardContent>
+      </Card>
 
-      {/* Individual Currency Balances */}
+      {/* Individual Balances */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
         {balances.map((balance) => (
-          <Card key={balance.currency.code}>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">
-                {balance.currency.name} Balance
-              </CardTitle>
-              {balance.currency.imageUrl && (
-                <Image
-                  src={balance.currency.imageUrl}
-                  alt={balance.currency.name}
-                  width={24}
-                  height={24}
-                  className="rounded-full"
-                />
-              )}
+          <Card key={balance.id}>
+            <CardHeader className="pb-3">
+              <div className="flex items-center gap-2">
+                {balance.imageUrl && (
+                  <img 
+                    src={balance.imageUrl} 
+                    alt={balance.name}
+                    className="w-6 h-6 rounded-full"
+                    onError={(e) => {
+                      (e.target as HTMLImageElement).style.display = 'none'
+                    }}
+                  />
+                )}
+                <div>
+                  <CardTitle className="text-base">{balance.currency}</CardTitle>
+                  <p className="text-xs text-muted-foreground">{balance.name}</p>
+                </div>
+              </div>
+              <Badge variant="secondary" className="w-fit text-xs">
+                {balance.network.toUpperCase()}
+              </Badge>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">
-                {balance.amount.toFixed(8)} {balance.currency.code}
+              <div className="space-y-2">
+                <div>
+                  <div className="text-xl font-semibold">
+                    {balance.balance.toFixed(6)} {balance.currency}
+                  </div>
+                  <div className="text-sm text-muted-foreground">
+                    ≈ {formatCurrency(balance.value)}
+                  </div>
+                </div>
+                
+                {balance.balance > 0 && (
+                  <div className="text-xs text-muted-foreground space-y-1">
+                    <div>Available: {balance.availableBalance.toFixed(6)}</div>
+                    {balance.lockedBalance > 0 && (
+                      <div className="text-orange-500">
+                        Locked: {balance.lockedBalance.toFixed(6)}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
-              <p className="text-xs text-muted-foreground">
-                ≈ {formatCurrency(balance.amount * balance.price)}
-              </p>
-              <p className="text-xs text-muted-foreground mt-1">
-                Network: {balance.currency.network.name}
-              </p>
             </CardContent>
           </Card>
         ))}
       </div>
 
       {/* Quick Stats */}
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-4">
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium">Active Currencies</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">{activeBalances.length}</div>
-            <p className="text-xs text-muted-foreground">With balance = 0</p> 
           </CardContent>
         </Card>
         
@@ -172,42 +153,33 @@ export function MerchantOverview({ merchantId }: { merchantId: string }) {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">{balances.length}</div>
-            <p className="text-xs text-muted-foreground">Created wallets</p>
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium">Highest Value</CardTitle>
+            <CardTitle className="text-sm font-medium">Highest Balance</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">
-              {balances.length > 0 
-                ? formatCurrency(Math.max(...balances.map(b => b.amount * b.price)))
-                : '$0.00'}
+            <div className="text-lg font-bold">
+              {activeBalances.length > 0 ? formatCurrency(activeBalances[0].value) : '$0.00'}
             </div>
-            <p className="text-xs text-muted-foreground">
-              {balances.length > 0 && balances[0] 
-                ? balances[0].currency.code
-                : 'No balance'}
-            </p>
+            {activeBalances.length > 0 && (
+              <p className="text-xs text-muted-foreground">
+                {activeBalances[0].currency}
+              </p>
+            )}
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium">Last Updated</CardTitle>
+            <CardTitle className="text-sm font-medium">Total Received</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-xl font-bold">
-              {balances.length > 0 
-                ? new Date(balances[0].lastUpdated).toLocaleTimeString('en-US', { 
-                    hour: '2-digit', 
-                    minute: '2-digit'
-                  })
-                : 'N/A'}
+            <div className="text-lg font-bold">
+              {formatCurrency(balances.reduce((sum, b) => sum + (b.totalReceived * b.price), 0))}
             </div>
-            <p className="text-xs text-muted-foreground">Real-time prices</p>
           </CardContent>
         </Card>
       </div>

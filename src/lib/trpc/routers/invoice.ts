@@ -1,140 +1,184 @@
 import { z } from 'zod'
 import { TRPCError } from '@trpc/server'
-import { createTRPCRouter, merchantAuthenticatedProcedure } from '../procedures'
+import { createTRPCRouter, userAuthenticatedProcedure, merchantAuthenticatedProcedure, userOwnsMerchantProcedure } from '../procedures'
 
 export const invoiceRouter = createTRPCRouter({
   // Create new invoice
-  create: merchantAuthenticatedProcedure
+  create: userAuthenticatedProcedure
     .input(
       z.object({
-        amount: z.string().regex(/^\d+(\.\d{1,18})?$/, 'Invalid amount format'),
-        currency: z.string().min(3).max(20).toUpperCase(),
+        merchantId: z.string().min(1),
+        amount: z.number().positive(),
+        currency: z.string().min(2).max(10),
+        network: z.string().min(2).max(20), 
         description: z.string().max(500).optional(),
-        expiresIn: z.number().min(300).max(604800).default(3600), // 5 minutes to 7 days
         orderId: z.string().max(100).optional(),
-        customData: z.record(z.any()).optional(),
-        notifyUrl: z.string().url().optional(),
-        redirectUrl: z.string().url().optional(),
-        returnUrl: z.string().url().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
-      // Find currency and merchant wallet
-      const currency = await ctx.prisma.currency.findFirst({
+      // Verify the merchant belongs to the authenticated user
+      const merchant = await ctx.prisma.merchant.findFirst({
         where: {
-          OR: [
-            { code: input.currency },
-            { symbol: input.currency },
-          ],
+          id: input.merchantId,
+          userId: ctx.user.userId,
           isActive: true,
         },
-        include: {
-          network: true,
-        },
       })
 
-      if (!currency) {
+      if (!merchant) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'You do not have permission to access this merchant',
+        })
+      }
+      // Find the global HD wallet for this currency/network combination
+      const globalWallet = await ctx.prisma.globalHDWallet.findFirst({
+        where: {
+          currency: input.currency.toUpperCase(),
+          network: input.network.toLowerCase(),
+          status: 'ACTIVE'
+        }
+      })
+
+      if (!globalWallet) {
         throw new TRPCError({
           code: 'BAD_REQUEST',
-          message: `Unsupported currency: ${input.currency}`,
+          message: `No wallet found for ${input.currency} on ${input.network}`,
         })
       }
 
-      // Get or create merchant wallet for this currency
-      let wallet = await ctx.prisma.wallet.findFirst({
-        where: {
-          merchantId: ctx.merchant.id,
-          currencyId: currency.id,
-        },
-      })
+      // Generate a unique deposit address from the global HD wallet
+      const { generateAddress } = await import('../../hdwallet/address-generator')
+      const addressResult = await generateAddress(globalWallet.id, merchant.id)
 
-      if (!wallet) {
-        // Create virtual account for this currency
-        const tatumVAManager = await import('@/lib/tatum/client').then(m => m.tatumVAManager)
-        const account = await tatumVAManager.createVirtualAccount(currency.network.tatumChainId, ctx.merchant.id)
-
-        wallet = await ctx.prisma.wallet.create({
-          data: {
-            tatumAccountId: account.id,
-            merchantId: ctx.merchant.id,
-            currencyId: currency.id,
-          },
-        })
-      }
-
-      // Generate unique deposit address
-      const tatumVAManager = await import('@/lib/tatum/client').then(m => m.tatumVAManager)
-      const addressResult = await tatumVAManager.generateDepositAddress(wallet.tatumAccountId)
+      // Calculate expiration time (1 hour default)
+      const expiresAt = new Date(Date.now() + 3600 * 1000)
 
       // Create QR code data
-      const qrData = `${currency.symbol.toLowerCase()}:${addressResult.address}?amount=${input.amount}`
+      const qrData = `${input.currency.toLowerCase()}:${addressResult.address}?amount=${input.amount}`
 
-      // Calculate expiration time
-      const expiresAt = new Date(Date.now() + input.expiresIn * 1000)
+      // Set up Tatum webhook subscription BEFORE creating invoice
+      // This ensures we have monitoring in place before the invoice exists
+      let subscriptionId: string | null = null
+      const skipSubscription = process.env.SKIP_TATUM_SUBSCRIPTION === 'true'
+      
+      if (!skipSubscription) {
+        try {
+          const { tatumNotificationService } = await import('../../tatum/notification-service')
+          
+          // For now, we'll create the invoice first then the subscription
+          // But if subscription fails, we'll delete the invoice to maintain consistency
+          
+          // Create invoice using pure HD wallet system
+          const invoice = await ctx.prisma.invoice.create({
+            data: {
+              amount: input.amount,
+              currency: input.currency.toUpperCase(),
+              description: input.description,
+              orderId: input.orderId,
+              depositAddress: addressResult.address,
+              qrCodeData: qrData,
+              expiresAt,
+              merchantId: merchant.id,
+              derivedAddressId: addressResult.derivedAddressId, // HD wallet derived address - primary reference
+              status: 'PENDING'
+            }
+          })
 
-      // Create invoice
-      const invoice = await ctx.prisma.invoice.create({
-        data: {
-          amount: parseFloat(input.amount),
-          currency: input.currency,
-          description: input.description,
-          orderId: input.orderId,
-          customData: input.customData,
-          depositAddress: addressResult.address,
-          qrCodeData: qrData,
-          expiresAt,
-          notifyUrl: input.notifyUrl,
-          redirectUrl: input.redirectUrl,
-          returnUrl: input.returnUrl,
-          merchantId: ctx.merchant.id,
-          walletId: wallet.id,
-        },
-        include: {
-          wallet: {
-            include: {
-              currency: {
-                include: {
-                  network: true,
-                },
-              },
-            },
-          },
-        },
-      })
+          try {
+            subscriptionId = await tatumNotificationService.createSubscription({
+              address: addressResult.address,
+              chain: input.network,
+              invoiceId: invoice.id
+            })
 
-      // Set up webhook for address monitoring
-      try {
-        const webhookUrl = process.env.NEXT_PUBLIC_APP_URL + '/api/webhook/tatum'
-        await tatumVAManager.createWebhookSubscription(
-          currency.network.tatumChainId,
-          addressResult.address,
-          webhookUrl
-        )
-      } catch (error) {
-        console.error('Failed to create webhook subscription:', error)
-        // Don't fail the invoice creation if webhook setup fails
-      }
+            // Update derived address with subscription info
+            await ctx.prisma.derivedAddress.update({
+              where: { id: addressResult.derivedAddressId },
+              data: {
+                tatumSubscriptionId: subscriptionId,
+                subscriptionActive: true
+              }
+            })
 
-      return {
-        id: invoice.id,
-        amount: invoice.amount.toString(),
-        currency: invoice.currency,
-        description: invoice.description,
-        orderId: invoice.orderId,
-        depositAddress: invoice.depositAddress,
-        qrCodeData: invoice.qrCodeData,
-        status: invoice.status,
-        expiresAt: invoice.expiresAt.toISOString(),
-        createdAt: invoice.createdAt.toISOString(),
-        network: currency.network.name,
-        networkCode: currency.network.code,
-        confirmationsRequired: currency.network.blockConfirmations,
+            console.log(`✅ [INVOICE] Tatum subscription created for invoice ${invoice.id}: ${subscriptionId}`)
+          } catch (subscriptionError) {
+            console.error(`❌ [INVOICE] Failed to create Tatum subscription, rolling back invoice:`, subscriptionError)
+            
+            // Delete the invoice and derived address since we can't monitor payments
+            await ctx.prisma.invoice.delete({
+              where: { id: invoice.id }
+            })
+            
+            await ctx.prisma.derivedAddress.delete({
+              where: { id: addressResult.derivedAddressId }
+            })
+            
+            throw new TRPCError({
+              code: 'INTERNAL_SERVER_ERROR',
+              message: 'Failed to set up payment monitoring. The invoice was not created. Please check your Tatum API configuration and try again.',
+              cause: subscriptionError
+            })
+          }
+
+          return {
+            id: invoice.id,
+            amount: invoice.amount.toString(),
+            currency: invoice.currency,
+            network: input.network,
+            description: invoice.description,
+            orderId: invoice.orderId,
+            depositAddress: invoice.depositAddress,
+            qrCodeData: invoice.qrCodeData,
+            expiresAt: invoice.expiresAt.toISOString(),
+            status: invoice.status,
+            message: 'Invoice created successfully with payment monitoring enabled'
+          }
+        } catch (error) {
+          // If we get here, either invoice creation failed or subscription failed and we rolled back
+          throw error
+        }
+      } else {
+        // Skip subscription mode - create invoice without monitoring
+        console.log(`⚠️ [INVOICE] Creating invoice without Tatum subscription (SKIP_TATUM_SUBSCRIPTION=true)`)
+        
+        const invoice = await ctx.prisma.invoice.create({
+          data: {
+            amount: input.amount,
+            currency: input.currency.toUpperCase(),
+            description: input.description,
+            orderId: input.orderId,
+            depositAddress: addressResult.address,
+            qrCodeData: qrData,
+            expiresAt,
+            merchantId: merchant.id,
+            derivedAddressId: addressResult.derivedAddressId,
+            status: 'PENDING'
+          }
+        })
+
+        return {
+          id: invoice.id,
+          amount: invoice.amount.toString(),
+          currency: invoice.currency,
+          network: input.network,
+          description: invoice.description,
+          orderId: invoice.orderId,
+          depositAddress: invoice.depositAddress,
+          qrCodeData: invoice.qrCodeData,
+          expiresAt: invoice.expiresAt.toISOString(),
+          status: invoice.status,
+          message: 'Invoice created successfully (without payment monitoring)'
+        }
       }
     }),
 
-  // Get invoice by ID
-  get: merchantAuthenticatedProcedure
-    .input(z.object({ invoiceId: z.string().uuid() }))
+  // Get invoice by ID (Dashboard access)
+  get: userOwnsMerchantProcedure
+    .input(z.object({ 
+      merchantId: z.string().min(1),
+      invoiceId: z.string().min(1) 
+    }))
     .query(async ({ ctx, input }) => {
       const invoice = await ctx.prisma.invoice.findFirst({
         where: {
@@ -142,13 +186,9 @@ export const invoiceRouter = createTRPCRouter({
           merchantId: ctx.merchant.id,
         },
         include: {
-          wallet: {
+          derivedAddress: {
             include: {
-              currency: {
-                include: {
-                  network: true,
-                },
-              },
+              globalWallet: true,
             },
           },
           transactions: {
@@ -178,9 +218,66 @@ export const invoiceRouter = createTRPCRouter({
         paidAt: invoice.paidAt?.toISOString(),
         expiresAt: invoice.expiresAt.toISOString(),
         createdAt: invoice.createdAt.toISOString(),
-        network: invoice.wallet.currency.network.name,
-        networkCode: invoice.wallet.currency.network.code,
-        confirmationsRequired: invoice.wallet.currency.network.blockConfirmations,
+        network: invoice.derivedAddress.globalWallet.network,
+        networkCode: invoice.derivedAddress.globalWallet.network,
+        confirmationsRequired: 6, // Default confirmations - get from network config if needed
+        transactions: invoice.transactions.map(tx => ({
+          id: tx.id,
+          txHash: tx.txHash,
+          amount: tx.amount.toString(),
+          blockNumber: tx.blockNumber?.toString(),
+          confirmations: tx.confirmations,
+          status: tx.status,
+          createdAt: tx.createdAt.toISOString(),
+        })),
+      }
+    }),
+
+  // Get invoice by ID (External API access)
+  getExternal: merchantAuthenticatedProcedure
+    .input(z.object({ invoiceId: z.string().min(1) }))
+    .query(async ({ ctx, input }) => {
+      const invoice = await ctx.prisma.invoice.findFirst({
+        where: {
+          id: input.invoiceId,
+          merchantId: ctx.merchant.id,
+        },
+        include: {
+          derivedAddress: {
+            include: {
+              globalWallet: true,
+            },
+          },
+          transactions: {
+            orderBy: { createdAt: 'desc' },
+          },
+        },
+      })
+
+      if (!invoice) {
+        throw new TRPCError({
+          code: 'NOT_FOUND',
+          message: 'Invoice not found',
+        })
+      }
+
+      return {
+        id: invoice.id,
+        amount: invoice.amount.toString(),
+        amountPaid: invoice.amountPaid.toString(),
+        currency: invoice.currency,
+        description: invoice.description,
+        orderId: invoice.orderId,
+        customData: invoice.customData,
+        depositAddress: invoice.depositAddress,
+        qrCodeData: invoice.qrCodeData,
+        status: invoice.status,
+        paidAt: invoice.paidAt?.toISOString(),
+        expiresAt: invoice.expiresAt.toISOString(),
+        createdAt: invoice.createdAt.toISOString(),
+        network: invoice.derivedAddress.globalWallet.network,
+        networkCode: invoice.derivedAddress.globalWallet.network,
+        confirmationsRequired: 6, // Default confirmations - get from network config if needed
         transactions: invoice.transactions.map(tx => ({
           id: tx.id,
           txHash: tx.txHash,
@@ -226,13 +323,9 @@ export const invoiceRouter = createTRPCRouter({
         ctx.prisma.invoice.findMany({
           where,
           include: {
-            wallet: {
+            derivedAddress: {
               include: {
-                currency: {
-                  include: {
-                    network: true,
-                  },
-                },
+                globalWallet: true,
               },
             },
             transactions: {
@@ -260,8 +353,8 @@ export const invoiceRouter = createTRPCRouter({
           paidAt: invoice.paidAt?.toISOString(),
           expiresAt: invoice.expiresAt.toISOString(),
           createdAt: invoice.createdAt.toISOString(),
-          network: invoice.wallet.currency.network.name,
-          networkCode: invoice.wallet.currency.network.code,
+          network: invoice.derivedAddress.globalWallet.network,
+          networkCode: invoice.derivedAddress.globalWallet.network,
           transactionCount: invoice.transactions.length,
           lastTransaction: invoice.transactions[0] ? {
             txHash: invoice.transactions[0].txHash,

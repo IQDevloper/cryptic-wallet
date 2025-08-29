@@ -45,9 +45,17 @@ const MerchantSettings = dynamic(
     }
 )
 
+const WithdrawalForm = dynamic(
+    () => import('./_components/withdrawal-form').then(mod => mod.WithdrawalForm),
+    {
+        loading: () => <Skeleton className="h-[400px] w-full" />
+    }
+)
+
 const tabs = [
     { id: 'overview', label: 'Overview' },
     { id: 'invoices', label: 'Invoices' },
+    { id: 'withdraw', label: 'Withdraw' },
     { id: 'integration', label: 'Integration' },
     { id: 'settings', label: 'Settings' }
 ]
@@ -117,6 +125,16 @@ export default async function MerchantPage({
                         <Suspense fallback={<Skeleton className="h-[400px] w-full" />}>
                             <MerchantInvoices merchant={merchant} />
                         </Suspense>
+                    )}
+                </TabsContent>
+
+                <TabsContent value="withdraw" className="space-y-4">
+                    {tab === 'withdraw' && (
+                        <div className="max-w-2xl">
+                            <Suspense fallback={<Skeleton className="h-[600px] w-full" />}>
+                                <WithdrawalForm merchantId={merchantId} />
+                            </Suspense>
+                        </div>
                     )}
                 </TabsContent>
 

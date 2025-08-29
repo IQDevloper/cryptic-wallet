@@ -31,6 +31,11 @@ interface CreateVirtualAccountRequest {
   accountCode?: string
   accountingCurrency?: string
   accountNumber?: string
+  xpub?: string // Required for cryptocurrency accounts
+}
+
+interface CreateVirtualAccountBatchRequest {
+  accounts: CreateVirtualAccountRequest[]
 }
 
 interface VirtualAccountResponse {
@@ -58,7 +63,7 @@ interface DepositAddressResponse {
 }
 
 interface WebhookSubscriptionRequest {
-  type: 'ADDRESS_TRANSACTION' | 'ACCOUNT_BALANCE_LIMIT' | 'TRANSACTION_IN_THE_BLOCK'
+  type: 'ADDRESS_EVENT' | 'INCOMING_NATIVE_TX' | 'OUTGOING_NATIVE_TX' | 'INCOMING_FUNGIBLE_TX' | 'OUTGOING_FUNGIBLE_TX'
   attr: {
     address?: string
     chain: string
@@ -96,7 +101,7 @@ class TatumHttpClient {
   private maxRetries: number = 3
   private retryDelay: number = 1000 // ms
 
-  constructor(baseUrl: string = TATUM_BASE_URL, apiKey: string = TATUM_API_KEY) {
+  constructor(baseUrl: string = TATUM_BASE_URL, apiKey: string = TATUM_API_KEY!) {
     this.baseUrl = baseUrl
     this.apiKey = apiKey
   }
@@ -136,6 +141,15 @@ class TatumHttpClient {
           errorData = { message: errorText }
         }
 
+        // Log full error details for debugging
+        console.error(`[Tatum API] Error response:`, {
+          status: response.status,
+          statusText: response.statusText,
+          errorData,
+          endpoint,
+          method: options.method || 'GET'
+        })
+
         // Handle rate limiting with exponential backoff
         if (response.status === 429 && attempt <= this.maxRetries) {
           const delayMs = this.retryDelay * Math.pow(2, attempt - 1)
@@ -152,7 +166,12 @@ class TatumHttpClient {
           return this.makeRequest<T>(endpoint, options, attempt + 1)
         }
 
-        throw new Error(`Tatum API error (${response.status}): ${errorData.message || response.statusText}`)
+        // Include more detail in error message
+        const errorMessage = errorData.data 
+          ? `${errorData.message || response.statusText}. Details: ${JSON.stringify(errorData.data)}`
+          : errorData.message || response.statusText
+
+        throw new Error(`Tatum API error (${response.status}): ${errorMessage}`)
       }
 
       const data = await response.json()
@@ -223,7 +242,7 @@ const getCurrencyCode = (chainId: string): string => {
   const currencyMap: Record<string, string> = {
     bitcoin: 'BTC',
     ethereum: 'ETH', 
-    bsc: 'BSC',
+    bsc: 'BNB',  // BSC native currency is BNB
     tron: 'TRX',
     polygon: 'MATIC',
     dogecoin: 'DOGE',
@@ -260,10 +279,79 @@ export class TatumVirtualAccountManager {
   }
 
   /**
-   * Create a virtual account using POST /v3/offchain/account
+   * Check if the provided string is already a standard currency code
    */
-  async createVirtualAccount(chainId: string, customerId?: string): Promise<VirtualAccountResponse> {
-    const currency = getCurrencyCode(chainId)
+  private isStandardCurrencyCode(code: string): boolean {
+    const standardCurrencies = ['BTC', 'ETH', 'USDT', 'MATIC', 'TRX', 'BNB', 'DOGE', 'LTC', 'BCH']
+    return standardCurrencies.includes(code.toUpperCase())
+  }
+
+  /**
+   * Check if the currency is supported by Tatum virtual accounts
+   * Based on Tatum API documentation and testing
+   */
+  private isSupportedVirtualAccountCurrency(code: string): boolean {
+    // From Tatum docs: Native blockchain assets, digital assets, and virtual currencies are supported
+    // These are the currencies that work with virtual accounts based on documentation
+    const supportedCurrencies = [
+      // Native blockchain assets
+      'BTC', 'ETH', 'LTC', 'DOGE', 'BCH', 'ADA', 'XRP', 'ALGO',
+      // Digital assets / Stablecoins
+      'USDT', 'USDC', 'BUSD', 'DAI',
+      // Some other supported tokens
+      'LINK', 'UNI', 'AAVE'
+    ]
+    return supportedCurrencies.includes(code.toUpperCase())
+  }
+
+  /**
+   * Get additional parameters required for specific currencies
+   */
+  private getCurrencySpecificParams(currency: string): Partial<CreateVirtualAccountRequest> {
+    const params: Partial<CreateVirtualAccountRequest> = {}
+    
+    // For cryptocurrencies that need special handling
+    switch (currency.toUpperCase()) {
+      case 'BTC':
+      case 'LTC':
+      case 'DOGE':
+      case 'BCH':
+        // Bitcoin-like currencies might need xpub for HD wallets
+        // For now, we'll create accounts without xpub (custodial accounts)
+        params.compliant = false
+        break
+      case 'ETH':
+      case 'USDT':
+      case 'USDC':
+        // Ethereum-based currencies
+        params.compliant = false
+        break
+      default:
+        params.compliant = false
+    }
+    
+    return params
+  }
+
+  /**
+   * Create a virtual account using POST /v3/ledger/account
+   * Creates a new virtual account for the specified currency and customer
+   */
+  async createVirtualAccount(currencyCode: string, customerId?: string): Promise<VirtualAccountResponse> {
+    // If it's a standard currency code (USDT, BTC, ETH), use it directly
+    // If it's a chain ID, map it to currency code
+    const currency = this.isStandardCurrencyCode(currencyCode) 
+      ? currencyCode 
+      : getCurrencyCode(currencyCode)
+
+    // Check if currency is supported for virtual accounts
+    if (!this.isSupportedVirtualAccountCurrency(currency)) {
+      const supportedList = ['BTC', 'ETH', 'LTC', 'DOGE', 'BCH', 'ADA', 'XRP', 'ALGO', 'USDT', 'USDC', 'BUSD', 'DAI', 'LINK', 'UNI', 'AAVE']
+      throw new Error(`Currency ${currency} is not supported for Tatum virtual accounts. Supported currencies: ${supportedList.join(', ')}`)
+    }
+    
+    // Get currency-specific parameters
+    const currencyParams = this.getCurrencySpecificParams(currency)
     
     const requestData: CreateVirtualAccountRequest = {
       currency,
@@ -271,22 +359,99 @@ export class TatumVirtualAccountManager {
         externalId: customerId,
         accountingCurrency: 'USD' 
       } : undefined,
-      compliant: false,
-      accountingCurrency: 'USD'
+      accountingCurrency: 'USD',
+      ...currencyParams
     }
 
     try {
-      console.log(`[Tatum VA] Creating virtual account for ${currency} (${chainId})`)
+      console.log(`[Tatum VA] Creating virtual account for ${currency}`)
       const response = await this.httpClient.post<VirtualAccountResponse>(
-        '/v3/offchain/account',
+        '/v3/ledger/account',
         requestData
       )
 
       console.log(`[Tatum VA] Virtual account created: ${response.id}`)
       return response
     } catch (error) {
-      console.error(`Failed to create virtual account for ${chainId}:`, error)
+      console.error(`Failed to create virtual account for ${currency}:`, error)
       throw new Error(`Failed to create virtual account: ${(error as Error).message}`)
+    }
+  }
+
+  /**
+   * Create multiple virtual accounts in batch using POST /v3/ledger/account/batch
+   * More efficient than creating accounts one by one
+   */
+  async createVirtualAccountsBatch(
+    currencies: { currency: string, customerId?: string }[]
+  ): Promise<{ successful: VirtualAccountResponse[], failed: { currency: string, error: string }[] }> {
+    const accounts: CreateVirtualAccountRequest[] = []
+    const unsupportedCurrencies: { currency: string, error: string }[] = []
+    
+    // Prepare accounts for supported currencies
+    for (const { currency: currencyCode, customerId } of currencies) {
+      const currency = this.isStandardCurrencyCode(currencyCode) 
+        ? currencyCode 
+        : getCurrencyCode(currencyCode)
+        
+      if (!this.isSupportedVirtualAccountCurrency(currency)) {
+        const supportedList = ['BTC', 'ETH', 'LTC', 'DOGE', 'BCH', 'ADA', 'XRP', 'ALGO', 'USDT', 'USDC', 'BUSD', 'DAI', 'LINK', 'UNI', 'AAVE']
+        unsupportedCurrencies.push({
+          currency,
+          error: `Currency ${currency} is not supported for Tatum virtual accounts. Supported: ${supportedList.join(', ')}`
+        })
+        continue
+      }
+      
+      const currencyParams = this.getCurrencySpecificParams(currency)
+      
+      accounts.push({
+        currency,
+        customer: customerId ? { 
+          externalId: customerId,
+          accountingCurrency: 'USD' 
+        } : undefined,
+        accountingCurrency: 'USD',
+        ...currencyParams
+      })
+    }
+    
+    if (accounts.length === 0) {
+      return { successful: [], failed: unsupportedCurrencies }
+    }
+    
+    try {
+      console.log(`[Tatum VA] Creating ${accounts.length} virtual accounts in batch`)
+      
+      const response = await this.httpClient.post<VirtualAccountResponse[]>(
+        '/v3/ledger/account/batch',
+        { accounts }
+      )
+      
+      console.log(`[Tatum VA] Batch created ${response.length} virtual accounts`)
+      return { 
+        successful: response, 
+        failed: unsupportedCurrencies 
+      }
+    } catch (error) {
+      console.error('Failed to create virtual accounts in batch:', error)
+      // If batch fails, fall back to individual creation for debugging
+      const successful: VirtualAccountResponse[] = []
+      const failed = [...unsupportedCurrencies]
+      
+      for (const accountData of accounts) {
+        try {
+          const account = await this.createVirtualAccount(accountData.currency, accountData.customer?.externalId)
+          successful.push(account)
+        } catch (individualError) {
+          failed.push({
+            currency: accountData.currency,
+            error: (individualError as Error).message
+          })
+        }
+      }
+      
+      return { successful, failed }
     }
   }
 
@@ -382,10 +547,25 @@ export class TatumVirtualAccountManager {
     address: string, 
     webhookUrl: string
   ): Promise<WebhookSubscriptionResponse> {
-    const chain = getChainId(chainId)
+    // Map chain to Tatum v4 format
+    const chainMap: Record<string, string> = {
+      bitcoin: 'bitcoin-mainnet',
+      ethereum: 'ethereum-mainnet',
+      bsc: 'bsc-mainnet',
+      tron: 'tron-mainnet',
+      polygon: 'polygon-mainnet',
+      dogecoin: 'doge-mainnet',
+      litecoin: 'litecoin-core-mainnet',
+      bcash: 'bch-mainnet',
+    }
+
+    const chain = chainMap[chainId.toLowerCase()]
+    if (!chain) {
+      throw new Error(`Unsupported chain for webhooks: ${chainId}. Supported: ${Object.keys(chainMap).join(', ')}`)
+    }
 
     const requestData: WebhookSubscriptionRequest = {
-      type: 'ADDRESS_TRANSACTION',
+      type: 'ADDRESS_EVENT',  // Changed from ADDRESS_TRANSACTION
       attr: {
         address,
         chain,

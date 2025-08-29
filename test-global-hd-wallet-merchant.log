@@ -1,0 +1,34 @@
+# Testing Global HD Wallet Merchant Creation
+
+## What Changed:
+1. ✅ Replaced Tatum Virtual Accounts with Global HD Wallets
+2. ✅ Created 6 Global HD Wallets (BTC, ETH, USDT-ETH, USDT-BSC, USDT-TRON, USDT-POLYGON)
+3. ✅ Updated merchant creation to use MerchantBalance system
+4. ✅ Each merchant gets balance records for all currencies automatically
+
+## Expected Results:
+- Merchant creation should be much faster (no Tatum API calls during creation)
+- Should create 6 balance records (one per global wallet)
+- No more "unsupported currency" errors
+- All balances start at 0.00
+
+## Test Steps:
+1. Navigate to /dashboard/merchants/create
+2. Create a new merchant
+3. Check balances in dashboard
+4. Verify all 6 currencies are present with 0.00 balances
+
+## Global HD Wallets Created:
+- BTC (bitcoin network)
+- ETH (ethereum network)  
+- USDT (ethereum network) - ERC-20 token
+- USDT (bsc network) - BEP-20 token
+- USDT (tron network) - TRC-20 token
+- USDT (polygon network) - Polygon token
+
+## Architecture Benefits:
+- ✅ Simplified: 6 global wallets instead of thousands per merchant
+- ✅ Scalable: Database-only balance tracking
+- ✅ Efficient: No API calls during merchant creation
+- ✅ Standard: How Coinbase Commerce, BitPay work
+- ✅ Fast: Instant balance updates

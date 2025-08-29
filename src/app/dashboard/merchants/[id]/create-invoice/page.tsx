@@ -10,7 +10,6 @@ import {
 } from '@/components/ui/breadcrumb'
 import Link from 'next/link'
 import getMerchant from '../actions/getMerchant'
-import { prisma } from '@/lib/prisma'
 
 export default async function CreateInvoicePage({
   params,
@@ -20,28 +19,6 @@ export default async function CreateInvoicePage({
   const { id: merchantId } = await params
   const merchant = await getMerchant(merchantId)
   
-  // Get all active currencies
-  const currencies = await prisma.currency.findMany({
-    where: {
-      isActive: true
-    },
-    select: {
-      id: true,
-      name: true,
-      code: true,
-      symbol: true,
-      imageUrl: true,
-      network: {
-        select: {
-          name: true,
-          code: true
-        }
-      }
-    },
-    orderBy: {
-      name: 'asc'
-    }
-  })
 
   return (
     <div className="flex flex-col gap-4">
@@ -74,7 +51,7 @@ export default async function CreateInvoicePage({
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <CreateInvoiceForm currencies={currencies} merchantId={merchantId} />
+            <CreateInvoiceForm merchantId={merchantId} />
           </CardContent>
         </Card>
       </div>
