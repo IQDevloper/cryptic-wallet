@@ -7,7 +7,7 @@ export default async function getMerchant(merchantId: string) {
         include: {
             merchantBalances: {
                 include: {
-                    globalWallet: true
+                    wallet: true
                 }
             },
             invoices: {
@@ -30,10 +30,10 @@ export default async function getMerchant(merchantId: string) {
             lockedBalance: balance.lockedBalance.toString(),
             totalReceived: balance.totalReceived.toString(),
             totalWithdrawn: balance.totalWithdrawn.toString(),
-            globalWallet: {
-                ...balance.globalWallet,
-                totalPoolBalance: balance.globalWallet.totalPoolBalance.toString(),
-                nextAddressIndex: balance.globalWallet.nextAddressIndex.toString()
+            wallet: {
+                ...balance.wallet,
+                totalPoolBalance: balance.wallet.totalPoolBalance.toString(),
+                nextAddressIndex: balance.wallet.nextAddressIndex.toString()
             }
         })),
         invoices: merchant.invoices.map(invoice => ({

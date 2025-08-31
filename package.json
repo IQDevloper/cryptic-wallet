@@ -11,6 +11,7 @@
     "db:push": "prisma db push",
     "db:migrate": "prisma migrate dev",
     "db:seed": "tsx prisma/seed.ts",
+    "generate-supported-wallets": "node scripts/generate-supported-kms-wallets.js",
     "type-check": "tsc --noEmit"
   },
   "dependencies": {

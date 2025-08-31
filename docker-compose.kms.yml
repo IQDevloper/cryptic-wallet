@@ -1,0 +1,35 @@
+services:
+  tatum-kms:
+    image: tatumio/tatum-kms:latest
+    container_name: cryptic-kms
+    restart: unless-stopped
+    
+    # Environment configuration
+    env_file:
+      - .env.kms
+    
+    # Data persistence - use dedicated kms-data directory  
+    volumes:
+      - ./kms-data:/home/node/.tatumrc
+      - ./kms-logs:/var/log/tatum-kms
+    
+    # Run KMS in daemon mode (API key read from env file)
+    command: ["daemon"]
+    
+    # Health check
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "tatum-kms"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "5"
+
+networks:
+  default:
+    name: cryptic-network

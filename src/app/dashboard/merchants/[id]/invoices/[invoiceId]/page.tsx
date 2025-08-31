@@ -5,10 +5,15 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { trpc } from '@/lib/trpc/client'
-import { formatCurrency } from '@/lib/utils'
 import { Copy, ExternalLink, QrCode } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
+import { 
+  getNetworkDisplayStandard, 
+  getCurrencyIcon,
+  formatCurrencyAmount,
+  getNetworkColor 
+} from '@/lib/crypto-assets-config'
 
 export default function InvoicePage() {
   const params = useParams()
@@ -113,12 +118,34 @@ export default function InvoicePage() {
             <CardContent className="space-y-4">
               <div>
                 <p className="text-sm font-medium text-muted-foreground">Amount</p>
-                <p className="text-2xl font-bold">
-                  {invoice.amount} {invoice.currency}
-                </p>
-                <p className="text-sm text-muted-foreground">
-                  Network: {invoice.network?.toUpperCase() || 'N/A'}
-                </p>
+                <div className="flex items-center gap-2">
+                  {getCurrencyIcon(invoice.currency) && (
+                    <img 
+                      src={getCurrencyIcon(invoice.currency)!} 
+                      alt={invoice.currency}
+                      className="w-6 h-6 rounded-full"
+                      onError={(e) => {
+                        (e.target as HTMLImageElement).style.display = 'none'
+                      }}
+                    />
+                  )}
+                  <p className="text-2xl font-bold">
+                    {formatCurrencyAmount(parseFloat(invoice.amount), invoice.currency)} {invoice.currency}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 mt-1">
+                  <p className="text-sm text-muted-foreground">Network:</p>
+                  <Badge 
+                    variant="secondary" 
+                    className="text-xs"
+                    style={{ 
+                      backgroundColor: getNetworkColor(invoice.currency, invoice.network) || undefined,
+                      color: getNetworkColor(invoice.currency, invoice.network) ? 'white' : undefined
+                    }}
+                  >
+                    {getNetworkDisplayStandard(invoice.currency, invoice.network)}
+                  </Badge>
+                </div>
               </div>
 
               {invoice.description && (
@@ -221,7 +248,7 @@ export default function InvoicePage() {
               </div>
               <div>
                 <p className="text-sm font-medium text-muted-foreground">Amount Paid</p>
-                <p>{invoice.amountPaid || '0'} {invoice.currency}</p>
+                <p>{formatCurrencyAmount(parseFloat(invoice.amountPaid || '0'), invoice.currency)} {invoice.currency}</p>
               </div>
               {invoice.paidAt && (
                 <div>
@@ -240,7 +267,7 @@ export default function InvoicePage() {
                       <div>
                         <p className="font-mono text-sm">{tx.txHash}</p>
                         <p className="text-xs text-muted-foreground">
-                          {tx.amount} {invoice.currency} • {tx.status}
+                          {formatCurrencyAmount(parseFloat(tx.amount), invoice.currency)} {invoice.currency} • {tx.status}
                         </p>
                       </div>
                       <p className="text-xs text-muted-foreground">

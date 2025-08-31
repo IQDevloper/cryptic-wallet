@@ -57,7 +57,7 @@ model Merchant {
   // wallets relation removed - using MerchantBalance with GlobalHDWallet system
   webhookDeliveries WebhookDelivery[]
   merchantBalances  MerchantBalance[]
-  derivedAddresses  DerivedAddress[]
+  addresses         Address[]
   withdrawals       Withdrawal[]
 
   @@index([isActive])
@@ -158,7 +158,7 @@ model Invoice {
   createdAt         DateTime          @default(now())
   updatedAt         DateTime          @updatedAt
   merchantId        String
-  derivedAddressId  String            // HD wallet derived address - primary reference
+  addressId         String            // Address - primary reference
   amountPaid        Decimal           @default(0) @db.Decimal(36, 18)
   confirmedAt       DateTime?
   customData        Json?
@@ -173,7 +173,7 @@ model Invoice {
   redirectUrl       String?
   returnUrl         String?
   merchant          Merchant          @relation(fields: [merchantId], references: [id], onDelete: Cascade)
-  derivedAddress    DerivedAddress    @relation(fields: [derivedAddressId], references: [id])  // Primary relation
+  address           Address           @relation(fields: [addressId], references: [id])  // Primary relation
   transactions      Transaction[]
   webhookDeliveries WebhookDelivery[]
   webhookNotifications WebhookNotification[]
@@ -403,42 +403,54 @@ enum UserRole {
   OPERATOR
 }
 
-enum GlobalWalletStatus {
+enum WalletStatus {
   ACTIVE
   INACTIVE
   MAINTENANCE
+  PENDING_SETUP
 }
 
-model GlobalHDWallet {
-  id                 String              @id @default(cuid())
-  currency           String              // "BTC", "ETH", "USDT"
-  network            String              // "bitcoin", "ethereum", "bsc", "tron"
-  contractAddress    String?             // NULL for native, contract address for tokens
-  mnemonicEncrypted  String              // Encrypted 24-word mnemonic phrase
-  xpub               String              // Extended public key for address derivation
-  encryptedPrivateKey String             // Encrypted master private key
-  derivationPath     String              // e.g., "m/44'/60'/0'/0" for Ethereum
-  nextAddressIndex   BigInt              @default(0) // Global counter for address derivation
-  totalPoolBalance   Decimal             @default(0) @db.Decimal(36, 18) // Total balance across all addresses
-  status             GlobalWalletStatus  @default(ACTIVE)
-  createdAt          DateTime            @default(now())
-  updatedAt          DateTime            @updatedAt
+enum WalletType {
+  MNEMONIC      // Wallet generated from mnemonic (can derive addresses)
+  PRIVATE_KEY   // Single private key wallet
+}
+
+// Tatum KMS wallet system - replaces GlobalHDWallet
+model Wallet {
+  id                 String            @id @default(cuid())
+  currency           String            // "BTC", "ETH", "USDT"
+  network            String            // "bitcoin", "ethereum", "bsc", "tron"
+  contractAddress    String?           // NULL for native, contract address for tokens
+  
+  // Tatum KMS specific fields
+  signatureId        String            @unique // KMS signature ID for wallet/mnemonic
+  walletType         WalletType        @default(MNEMONIC)
+  xpub               String?           // Extended public key (if available from KMS)
+  
+  // Address management
+  nextAddressIndex   BigInt            @default(0) // Counter for address derivation
+  totalPoolBalance   Decimal           @default(0) @db.Decimal(36, 18) // Total balance
+  
+  status             WalletStatus      @default(PENDING_SETUP)
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
 
   // Relations
   merchantBalances   MerchantBalance[]
-  derivedAddresses   DerivedAddress[]
+  addresses          Address[]
 
   @@unique([currency, network, contractAddress])
   @@index([status])
   @@index([currency])
   @@index([network])
-  @@map("global_hd_wallets")
+  @@index([signatureId])
+  @@map("wallets")
 }
 
 model MerchantBalance {
   id             String        @id @default(cuid())
   merchantId     String
-  globalWalletId String
+  walletId       String        // References Wallet
   balance        Decimal       @default(0) @db.Decimal(36, 18)       // Available balance
   lockedBalance  Decimal       @default(0) @db.Decimal(36, 18)       // Locked for pending withdrawals
   totalReceived  Decimal       @default(0) @db.Decimal(36, 18)       // Lifetime received
@@ -448,21 +460,26 @@ model MerchantBalance {
 
   // Relations
   merchant       Merchant      @relation(fields: [merchantId], references: [id], onDelete: Cascade)
-  globalWallet   GlobalHDWallet @relation(fields: [globalWalletId], references: [id], onDelete: Cascade)
+  wallet         Wallet        @relation(fields: [walletId], references: [id], onDelete: Cascade)
 
-  @@unique([merchantId, globalWalletId])
+  @@unique([merchantId, walletId])
   @@index([merchantId])
-  @@index([globalWalletId])
+  @@index([walletId])
   @@index([balance])
   @@map("merchant_balances")
 }
 
-model DerivedAddress {
+// Address system for KMS wallets - replaces DerivedAddress
+model Address {
   id                String         @id @default(cuid())
-  globalWalletId    String
+  walletId          String         // References Wallet
   merchantId        String
   address           String         @unique
-  derivationIndex   BigInt
+  derivationIndex   BigInt         // Address derivation index
+  
+  // KMS signature ID for this specific address private key (if stored separately)
+  signatureId       String?        @unique
+  
   currentBalance    Decimal        @default(0) @db.Decimal(36, 18)
   assignedToInvoice String?        // NULL if not assigned, invoice ID if assigned
   firstUsedAt       DateTime?
@@ -475,23 +492,24 @@ model DerivedAddress {
   lastNotificationAt  DateTime?    // Last webhook notification received
 
   // Relations
-  globalWallet      GlobalHDWallet @relation(fields: [globalWalletId], references: [id], onDelete: Cascade)
+  wallet            Wallet         @relation(fields: [walletId], references: [id], onDelete: Cascade)
   merchant          Merchant       @relation(fields: [merchantId], references: [id], onDelete: Cascade)
   invoices          Invoice[]
   webhookNotifications WebhookNotification[]
 
-  @@index([globalWalletId])
+  @@index([walletId])
   @@index([merchantId])
   @@index([derivationIndex])
   @@index([assignedToInvoice])
+  @@index([signatureId])
   @@index([tatumSubscriptionId])
   @@index([subscriptionActive])
-  @@map("derived_addresses")
+  @@map("addresses")
 }
 
 model WebhookNotification {
   id                String        @id @default(cuid())
-  derivedAddressId  String
+  addressId         String        // References Address
   invoiceId         String?       // Associated invoice if applicable
   txHash            String        @unique // Transaction hash from webhook
   amount            Decimal       @db.Decimal(36, 18)
@@ -504,10 +522,10 @@ model WebhookNotification {
   createdAt         DateTime      @default(now())
   
   // Relations
-  derivedAddress    DerivedAddress @relation(fields: [derivedAddressId], references: [id], onDelete: Cascade)
-  invoice           Invoice?       @relation(fields: [invoiceId], references: [id])
+  address           Address       @relation(fields: [addressId], references: [id], onDelete: Cascade)
+  invoice           Invoice?      @relation(fields: [invoiceId], references: [id])
 
-  @@index([derivedAddressId])
+  @@index([addressId])
   @@index([invoiceId])
   @@index([txHash])
   @@index([status])

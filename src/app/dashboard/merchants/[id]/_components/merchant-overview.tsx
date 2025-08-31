@@ -5,6 +5,12 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Badge } from '@/components/ui/badge'
 import { trpc } from '@/lib/trpc/client'
 import { formatCurrency } from '@/lib/utils'
+import { 
+  getNetworkDisplayStandard, 
+  getCurrencyIcon,
+  formatCurrencyAmount,
+  getNetworkColor 
+} from '@/lib/crypto-assets-config'
 
 
 interface MerchantOverviewProps {
@@ -87,7 +93,7 @@ export function MerchantOverview({ merchantId }: MerchantOverviewProps) {
           <Card key={balance.id}>
             <CardHeader className="pb-3">
               <div className="flex items-center gap-2">
-                {balance.imageUrl && (
+                {balance.imageUrl ? (
                   <img 
                     src={balance.imageUrl} 
                     alt={balance.name}
@@ -96,25 +102,40 @@ export function MerchantOverview({ merchantId }: MerchantOverviewProps) {
                       (e.target as HTMLImageElement).style.display = 'none'
                     }}
                   />
+                ) : (
+                  // Fallback to config icon if balance doesn't have imageUrl
+                  getCurrencyIcon(balance.currency) && (
+                    <img 
+                      src={getCurrencyIcon(balance.currency)!} 
+                      alt={balance.currency}
+                      className="w-6 h-6 rounded-full"
+                      onError={(e) => {
+                        (e.target as HTMLImageElement).style.display = 'none'
+                      }}
+                    />
+                  )
                 )}
                 <div>
                   <CardTitle className="text-base">{balance.currency}</CardTitle>
                   <p className="text-xs text-muted-foreground">{balance.name}</p>
                 </div>
               </div>
-              <Badge variant="secondary" className="w-fit text-xs">
-                {balance.network === 'tron' ? 'TRC20' : 
-                 balance.network === 'ethereum' ? 'ERC20' : 
-                 balance.network === 'bsc' ? 'BEP20' : 
-                 balance.network === 'polygon' ? 'MATIC' :
-                 balance.network.toUpperCase()}
+              <Badge 
+                variant="secondary" 
+                className="w-fit text-xs"
+                style={{ 
+                  backgroundColor: getNetworkColor(balance.currency, balance.network) || undefined,
+                  color: getNetworkColor(balance.currency, balance.network) ? 'white' : undefined
+                }}
+              >
+                {getNetworkDisplayStandard(balance.currency, balance.network, true)}
               </Badge>
             </CardHeader>
             <CardContent>
               <div className="space-y-2">
                 <div>
                   <div className="text-xl font-semibold">
-                    {balance.balance.toFixed(6)} {balance.currency}
+                    {formatCurrencyAmount(balance.balance, balance.currency)} {balance.currency}
                   </div>
                   <div className="text-sm text-muted-foreground">
                     ≈ {formatCurrency(balance.value)}
@@ -123,10 +144,10 @@ export function MerchantOverview({ merchantId }: MerchantOverviewProps) {
                 
                 {balance.balance > 0 && (
                   <div className="text-xs text-muted-foreground space-y-1">
-                    <div>Available: {balance.availableBalance.toFixed(6)}</div>
+                    <div>Available: {formatCurrencyAmount(balance.availableBalance, balance.currency)}</div>
                     {balance.lockedBalance > 0 && (
                       <div className="text-orange-500">
-                        Locked: {balance.lockedBalance.toFixed(6)}
+                        Locked: {formatCurrencyAmount(balance.lockedBalance, balance.currency)}
                       </div>
                     )}
                   </div>

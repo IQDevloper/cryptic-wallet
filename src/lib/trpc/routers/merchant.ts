@@ -2,7 +2,26 @@ import { z } from 'zod'
 import { TRPCError } from '@trpc/server'
 import { createTRPCRouter, userAuthenticatedProcedure, merchantAuthenticatedProcedure, userOwnsMerchantProcedure } from '../procedures'
 import crypto from 'crypto'
-import type { MerchantBalance, GlobalHDWallet } from '@prisma/client'
+
+type KMSWallet = {
+  id: string
+  currency: string
+  network: string
+  contractAddress?: string | null
+  kmsSignatureId: string
+  status: string
+}
+
+type MerchantBalanceWithWallet = {
+  id: string
+  merchantId: string
+  walletId: string
+  balance: any // Decimal type
+  lockedBalance: any // Decimal type
+  totalReceived: any // Decimal type 
+  totalWithdrawn: any // Decimal type
+  kmsWallet: KMSWallet
+}
 
 // Shared validation schemas
 const merchantIdSchema = z.object({ merchantId: z.string().cuid() })
@@ -24,14 +43,14 @@ const BRIDGE_FEE = 5.0
 
 // Helper function to select optimal withdrawal sources
 function selectOptimalSources(
-  currencyBalances: Array<MerchantBalance & { globalWallet: GlobalHDWallet }>,
+  currencyBalances: Array<MerchantBalanceWithWallet>,
   amount: number,
   targetNetwork: string
 ) {
 
   // Strategy 1: Check if we can withdraw directly from target network
   const sameNetworkBalance = currencyBalances.find(
-    cb => cb.globalWallet.network === targetNetwork
+    cb => cb.kmsWallet.network === targetNetwork
   )
   
   if (sameNetworkBalance) {
@@ -51,9 +70,9 @@ function selectOptimalSources(
   // Strategy 2: Use multiple networks if needed
   const sortedBalances = currencyBalances
     .map(cb => ({
-      network: cb.globalWallet.network,
+      network: cb.kmsWallet.network,
       available: parseFloat(cb.balance.toString()) - parseFloat(cb.lockedBalance.toString()),
-      fee: NETWORK_FEES[cb.globalWallet.network] || 1.0,
+      fee: NETWORK_FEES[cb.kmsWallet.network] || 1.0,
     }))
     .filter(b => b.available > 0)
     .sort((a, b) => a.fee - b.fee) // Sort by lowest fees first
@@ -216,108 +235,31 @@ export const merchantRouter = createTRPCRouter({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      // Get active currencies with network and base currency data
-      const activeCurrencies = await ctx.prisma.currency.findMany({
-        where: { isActive: true },
-        include: { 
-          network: true,
-          baseCurrency: true 
-        }
-      })
-
-      if (activeCurrencies.length === 0) {
-        throw new TRPCError({
-          code: 'PRECONDITION_FAILED',
-          message: 'No active currencies found. Cannot create merchant without currencies.',
-        })
-      }
-
       // Generate API key
       const apiKey = 'mk_' + crypto.randomBytes(32).toString('hex')
       const apiKeyHash = crypto.createHash('sha256').update(apiKey).digest('hex')
 
-      // Use transaction to ensure atomicity
-      const result = await ctx.prisma.$transaction(async (tx) => {
-        // Create merchant
-        const merchant = await tx.merchant.create({
-          data: {
-            name: input.name,
-            businessAddress: input.businessAddress,
-            webhookUrl: input.webhookUrl,
-            isActive: input.isActive,
-            apiKey,
-            apiKeyHash,
-            userId: ctx.user.userId,
-          },
-        })
-
-        // Initialize merchant balances for all active currencies
-        const balanceCreationResults = []
-        
-        // Create merchant balance record for each active currency
-        for (const currency of activeCurrencies) {
-          try {
-            // Find or create corresponding GlobalHDWallet for this currency/network
-            const globalWallet = await tx.globalHDWallet.findFirst({
-              where: {
-                currency: currency.baseCurrency.code,
-                network: currency.network.code,
-                contractAddress: currency.contractAddress,
-                status: 'ACTIVE'
-              }
-            })
-
-            if (!globalWallet) {
-              // Skip silently - this is expected for currencies without initialized wallets
-              continue
-            }
-
-            const merchantBalance = await tx.merchantBalance.create({
-              data: {
-                merchantId: merchant.id,
-                globalWalletId: globalWallet.id,
-                balance: 0,
-                lockedBalance: 0,
-                totalReceived: 0,
-                totalWithdrawn: 0
-              }
-            })
-            
-            balanceCreationResults.push({
-              currency: currency.baseCurrency.code,
-              network: currency.network.code,
-              contractAddress: currency.contractAddress,
-              balanceId: merchantBalance.id,
-              globalWalletId: globalWallet.id,
-              currencyId: currency.id,
-              success: true
-            })
-            
-          } catch (error) {
-            
-            throw new TRPCError({
-              code: 'INTERNAL_SERVER_ERROR',
-              message: `Failed to create balance for ${currency.baseCurrency.code} on ${currency.network.code}. Error: ${error instanceof Error ? error.message : 'Unknown error'}`,
-            })
-          }
-        }
-
-        return {
-          merchant,
-          balances: balanceCreationResults
-        }
+      // Create merchant (balances will be created dynamically via webhook)
+      const merchant = await ctx.prisma.merchant.create({
+        data: {
+          name: input.name,
+          businessAddress: input.businessAddress,
+          webhookUrl: input.webhookUrl,
+          isActive: input.isActive,
+          apiKey,
+          apiKeyHash,
+          userId: ctx.user.userId,
+        },
       })
 
 
       return {
-        id: result.merchant.id,
-        name: result.merchant.name,
-        apiKey: result.merchant.apiKey,
-        isActive: result.merchant.isActive,
-        createdAt: result.merchant.createdAt,
-        balancesCreated: result.balances.length,
-        balanceDetails: result.balances,
-        message: `Merchant created successfully with ${result.balances.length} currency balances across ${new Set(result.balances.map(b => b.network)).size} networks`,
+        id: merchant.id,
+        name: merchant.name,
+        apiKey: merchant.apiKey,
+        isActive: merchant.isActive,
+        createdAt: merchant.createdAt,
+        message: `Merchant created successfully. Balances will be created automatically when payments are received.`,
       }
     }),
 
@@ -346,18 +288,18 @@ export const merchantRouter = createTRPCRouter({
       }
     }),
 
-  // Get merchant wallets (returns HD wallet balances)
+  // Get merchant wallets (returns KMS wallet balances)
   getWallets: merchantAuthenticatedProcedure.query(async ({ ctx }) => {
-    // Return merchant balances from HD wallet system instead of legacy wallets
+    // Return merchant balances from KMS wallet system
     const merchantBalances = await ctx.prisma.merchantBalance.findMany({
       where: { merchantId: ctx.merchant.id },
       include: {
-        globalWallet: {
+        wallet: {
           select: {
             currency: true,
             network: true,
             contractAddress: true,
-            derivationPath: true,
+            signatureId: true,
           }
         }
       }
@@ -367,14 +309,14 @@ export const merchantRouter = createTRPCRouter({
     return merchantBalances.map(mb => ({
       id: mb.id,
       merchantId: mb.merchantId,
-      currency: mb.globalWallet.currency,
-      network: mb.globalWallet.network,
-      contractAddress: mb.globalWallet.contractAddress,
+      currency: mb.wallet.currency,
+      network: mb.wallet.network,
+      contractAddress: mb.wallet.contractAddress,
       balance: mb.balance.toString(),
       lockedBalance: mb.lockedBalance.toString(),
       totalReceived: mb.totalReceived.toString(),
       totalWithdrawn: mb.totalWithdrawn.toString(),
-      derivationPath: mb.globalWallet.derivationPath,
+      signatureId: mb.wallet.signatureId, // Add KMS signature ID for transaction signing
       isActive: true,
       createdAt: mb.createdAt,
       updatedAt: mb.lastUpdated,
@@ -402,9 +344,9 @@ export const merchantRouter = createTRPCRouter({
         ctx.prisma.invoice.findMany({
           where,
           include: {
-            derivedAddress: {
+            address: {
               include: {
-                globalWallet: true,
+                wallet: true,
               },
             },
             transactions: true,
@@ -484,7 +426,7 @@ export const merchantRouter = createTRPCRouter({
       const merchantBalances = await ctx.prisma.merchantBalance.findMany({
         where: { merchantId: ctx.merchant.id },
         include: {
-          globalWallet: {
+          wallet: {
             select: {
               currency: true,
               network: true,
@@ -506,7 +448,7 @@ export const merchantRouter = createTRPCRouter({
       // Create balance map for existing balances
       const balanceMap = new Map()
       merchantBalances.forEach(mb => {
-        const key = `${mb.globalWallet.currency}-${mb.globalWallet.network}`
+        const key = `${mb.wallet.currency}-${mb.wallet.network}`
         balanceMap.set(key, mb)
       })
 
@@ -559,100 +501,101 @@ export const merchantRouter = createTRPCRouter({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      // Get all merchant balances for this currency
-      const currencyBalances = await ctx.prisma.merchantBalance.findMany({
-        where: {
-          merchantId: ctx.merchant.id,
-          globalWallet: {
-            currency: input.currency,
-          },
-        },
-        include: {
-          globalWallet: true,
-        },
-      })
+      // TODO: implement withdrawal
+      // // Get all merchant balances for this currency
+      // const currencyBalances = await ctx.prisma.merchantBalance.findMany({
+      //   where: {
+      //     merchantId: ctx.merchant.id,
+      //     wallet: {
+      //       currency: input.currency,
+      //     },
+      //   },
+      //   include: {
+      //     wallet: true,
+      //   },
+      // })
 
-      if (currencyBalances.length === 0) {
-        throw new TRPCError({
-          code: 'NOT_FOUND',
-          message: `No balances found for ${input.currency}`,
-        })
-      }
+      // if (currencyBalances.length === 0) {
+      //   throw new TRPCError({
+      //     code: 'NOT_FOUND',
+      //     message: `No balances found for ${input.currency}`,
+      //   })
+      // }
 
-      // Calculate total available balance across all networks
-      const totalAvailable = currencyBalances.reduce((sum, mb) => {
-        const available = parseFloat(mb.balance.toString()) - parseFloat(mb.lockedBalance.toString())
-        return sum + available
-      }, 0)
+      // // Calculate total available balance across all networks
+      // const totalAvailable = currencyBalances.reduce((sum, mb) => {
+      //   const available = parseFloat(mb.balance.toString()) - parseFloat(mb.lockedBalance.toString())
+      //   return sum + available
+      // }, 0)
 
-      if (totalAvailable < input.amount) {
-        throw new TRPCError({
-          code: 'BAD_REQUEST',
-          message: `Insufficient balance. Available: ${totalAvailable}, Requested: ${input.amount}`,
-        })
-      }
+      // if (totalAvailable < input.amount) {
+      //   throw new TRPCError({
+      //     code: 'BAD_REQUEST',
+      //     message: `Insufficient balance. Available: ${totalAvailable}, Requested: ${input.amount}`,
+      //   })
+      // }
 
-      // Find optimal source networks for withdrawal
-      const withdrawalPlan = selectOptimalSources(
-        currencyBalances,
-        input.amount,
-        input.targetNetwork
-      )
+      // // Find optimal source networks for withdrawal
+      // const withdrawalPlan = selectOptimalSources(
+      //   currencyBalances,
+      //   input.amount,
+      //   input.targetNetwork
+      // )
 
-      // Start transaction to lock funds and create withdrawal record
-      const withdrawal = await ctx.prisma.$transaction(async (tx) => {
-        // Lock the required balances
-        for (const source of withdrawalPlan.sources) {
-          const merchantBalance = currencyBalances.find(
-            cb => cb.globalWallet.network === source.network
-          )
-          if (!merchantBalance) continue
+      // // Start transaction to lock funds and create withdrawal record
+      // const withdrawal = await ctx.prisma.$transaction(async (tx) => {
+      //   // Lock the required balances
+      //   for (const source of withdrawalPlan.sources) {
+      //     const merchantBalance = currencyBalances.find(
+      //       cb => cb.wallet.network === source.network
+      //     )
+      //     if (!merchantBalance) continue
 
-          await tx.merchantBalance.update({
-            where: {
-              id: merchantBalance.id,
-            },
-            data: {
-              lockedBalance: {
-                increment: source.amount,
-              },
-            },
-          })
-        }
+      //     await tx.merchantBalance.update({
+      //       where: {
+      //         id: merchantBalance.id,
+      //       },
+      //       data: {
+      //         lockedBalance: {
+      //           increment: source.amount,
+      //         },
+      //       },
+      //     })
+      //   }
 
-        // Create withdrawal record
-        const withdrawalRecord = await tx.withdrawal.create({
-          data: {
-            id: `wd_${crypto.randomBytes(16).toString('hex')}`,
-            merchantId: ctx.merchant.id,
-            currency: input.currency,
-            totalAmount: input.amount,
-            targetNetwork: input.targetNetwork,
-            targetAddress: input.targetAddress,
-            status: 'PENDING',
-            withdrawalSources: withdrawalPlan.sources,
-            totalFees: withdrawalPlan.totalFees,
-            needsBridging: withdrawalPlan.needsBridging,
-          },
-        })
+      //   // Create withdrawal record
+      //   const withdrawalRecord = await tx.withdrawal.create({
+      //     data: {
+      //       id: `wd_${crypto.randomBytes(16).toString('hex')}`,
+      //       merchantId: ctx.merchant.id,
+      //       currency: input.currency,
+      //       totalAmount: input.amount,
+      //       targetNetwork: input.targetNetwork,
+      //       targetAddress: input.targetAddress,
+      //       status: 'PENDING',
+      //       withdrawalSources: withdrawalPlan.sources,
+      //       totalFees: withdrawalPlan.totalFees,
+      //       needsBridging: withdrawalPlan.needsBridging,
+      //     },
+      //   })
 
-        return withdrawalRecord
-      })
+      //   return withdrawalRecord
+      // })
 
-      // Async withdrawal processing would be triggered here in production
+      // // Async withdrawal processing would be triggered here in production
       
-      return {
-        withdrawalId: withdrawal.id,
-        status: withdrawal.status,
-        amount: input.amount,
-        targetNetwork: input.targetNetwork,
-        targetAddress: input.targetAddress,
-        estimatedFees: withdrawalPlan.totalFees,
-        needsBridging: withdrawalPlan.needsBridging,
-        message: withdrawalPlan.needsBridging 
-          ? `Withdrawal requires cross-chain bridging. Estimated completion: 10-30 minutes.`
-          : `Direct network withdrawal. Estimated completion: 2-5 minutes.`,
-      }
+      // return {
+      //   withdrawalId: withdrawal.id,
+      //   status: withdrawal.status,
+      //   amount: input.amount,
+      //   targetNetwork: input.targetNetwork,
+      //   targetAddress: input.targetAddress,
+      //   estimatedFees: withdrawalPlan.totalFees,
+      //   needsBridging: withdrawalPlan.needsBridging,
+      //   message: withdrawalPlan.needsBridging 
+      //     ? `Withdrawal requires cross-chain bridging. Estimated completion: 10-30 minutes.`
+      //     : `Direct network withdrawal. Estimated completion: 2-5 minutes.`,
+      // }
     }),
 
   invoices: userOwnsMerchantProcedure
@@ -686,9 +629,9 @@ export const merchantRouter = createTRPCRouter({
         ctx.prisma.invoice.findMany({
           where,
           include: {
-            derivedAddress: {
+            address: {
               include: {
-                globalWallet: true,
+                wallet: true,
               },
             },
             transactions: true,
@@ -711,6 +654,171 @@ export const merchantRouter = createTRPCRouter({
       }
     }),
 
+  // Generate KMS wallets for merchant
+  generateKMSWallets: userOwnsMerchantProcedure
+    .input(merchantIdSchema)
+    .mutation(async ({ ctx }) => {
+      const { exec } = await import('child_process');
+      const { promisify } = await import('util');
+      const execAsync = promisify(exec);
+
+      // Import crypto assets configuration
+      const { CRYPTO_ASSETS } = await import('@/lib/crypto-assets-config');
+      
+      // Track unique chains to avoid duplicate wallet generation
+      const processedChains = new Set<string>();
+      const walletsToGenerate: Array<{
+        kmsChain: string;
+        currencySymbol: string;
+        networkName: string;
+      }> = [];
+      
+      // Collect all unique KMS chains from the configuration
+      for (const [symbol, asset] of Object.entries(CRYPTO_ASSETS)) {
+        for (const network of asset.networks) {
+          const chainKey = `${network.kmsChain}-${symbol}`;
+          
+          if (!processedChains.has(chainKey)) {
+            processedChains.add(chainKey);
+            walletsToGenerate.push({
+              kmsChain: network.kmsChain,
+              currencySymbol: symbol,
+              networkName: network.displayName || network.network,
+            });
+          }
+        }
+      }
+      
+      console.log(`Generating ${walletsToGenerate.length} KMS wallets for merchant ${ctx.merchant.id}...`);
+      
+      const generatedWallets: Array<{
+        signatureId: string;
+        xpub: string;
+        currency: string;
+        network: string;
+      }> = [];
+      
+      const failedWallets: Array<{
+        currency: string;
+        network: string;
+        error: string;
+      }> = [];
+      
+      // Generate wallets sequentially to avoid overwhelming KMS
+      for (const walletConfig of walletsToGenerate) {
+        try {
+          console.log(`Generating ${walletConfig.currencySymbol} wallet for ${walletConfig.networkName}...`);
+          
+          const command = `docker run --rm --env-file .env.kms -v ./kms-data:/home/node/.tatumrc tatumio/tatum-kms generatemanagedwallet ${walletConfig.kmsChain}`;
+          
+          const { stdout, stderr } = await execAsync(command);
+          
+          if (stderr) {
+            console.error(`Error generating ${walletConfig.currencySymbol} wallet:`, stderr);
+            failedWallets.push({
+              currency: walletConfig.currencySymbol,
+              network: walletConfig.networkName,
+              error: stderr
+            });
+            continue;
+          }
+
+          // Parse the JSON response from KMS
+          const response = JSON.parse(stdout.trim());
+          
+          if (response.signatureId && response.xpub) {
+            console.log(`Generated ${walletConfig.currencySymbol} wallet - Signature ID: ${response.signatureId}`);
+            
+            generatedWallets.push({
+              signatureId: response.signatureId,
+              xpub: response.xpub,
+              currency: walletConfig.currencySymbol,
+              network: walletConfig.networkName,
+            });
+          } else {
+            console.error(`Invalid response for ${walletConfig.currencySymbol} wallet:`, response);
+            failedWallets.push({
+              currency: walletConfig.currencySymbol,
+              network: walletConfig.networkName,
+              error: 'Invalid KMS response'
+            });
+          }
+          
+          // Small delay between generations
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          
+        } catch (error) {
+          console.error(`Failed to generate ${walletConfig.currencySymbol} wallet:`, error);
+          failedWallets.push({
+            currency: walletConfig.currencySymbol,
+            network: walletConfig.networkName,
+            error: error instanceof Error ? error.message : 'Unknown error'
+          });
+        }
+      }
+      
+      // Save generated wallets to database and create merchant balances
+      const savedWallets: Array<any> = [];
+      
+      for (const wallet of generatedWallets) {
+        try {
+          // Create wallet record
+          const savedWallet = await ctx.prisma.wallet.create({
+            data: {
+              currency: wallet.currency,
+              network: wallet.network,
+              signatureId: wallet.signatureId,
+              xpub: wallet.xpub,
+              // derivationPath removed - KMS handles derivation internally
+              status: 'ACTIVE' as any,
+            }
+          });
+          
+          // Create merchant balance for this wallet
+          const merchantBalance = await ctx.prisma.merchantBalance.create({
+            data: {
+              merchantId: ctx.merchant.id,
+              walletId: savedWallet.id,
+              balance: 0,
+              lockedBalance: 0,
+              totalReceived: 0,
+              totalWithdrawn: 0
+            }
+          });
+          
+          savedWallets.push({
+            ...savedWallet,
+            merchantBalance: merchantBalance
+          });
+          
+          console.log(`Saved ${wallet.currency} wallet and created merchant balance`);
+          
+        } catch (dbError) {
+          console.error(`Failed to save ${wallet.currency} wallet to database:`, dbError);
+          failedWallets.push({
+            currency: wallet.currency,
+            network: wallet.network,
+            error: dbError instanceof Error ? dbError.message : 'Database save failed'
+          });
+        }
+      }
+      
+      return {
+        success: true,
+        walletsGenerated: savedWallets.length,
+        walletsFailed: failedWallets.length,
+        generatedWallets: savedWallets.map(w => ({
+          id: w.id,
+          currency: w.currency,
+          network: w.network,
+          signatureId: w.signatureId,
+          balanceId: w.merchantBalance.id
+        })),
+        failedWallets,
+        message: `Successfully generated ${savedWallets.length} KMS wallets. ${failedWallets.length} failed.`
+      };
+    }),
+
   delete: userOwnsMerchantProcedure
     .input(merchantIdSchema)
     .mutation(async ({ ctx }) => {
@@ -727,8 +835,8 @@ export const merchantRouter = createTRPCRouter({
           }
         })
 
-        // 2. Delete derived addresses (this will also handle invoices due to cascade)
-        await tx.derivedAddress.deleteMany({
+        // 2. Delete KMS addresses (this will also handle invoices due to cascade)
+        await tx.address.deleteMany({
           where: {
             invoices: {
               some: {

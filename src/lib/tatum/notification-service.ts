@@ -110,11 +110,11 @@ export class TatumNotificationService {
     try {
       console.log(`🔔 Processing webhook for invoice: ${invoiceId}`)
 
-      // Find the invoice and its derived address
+      // Find the invoice and its address
       const invoice = await prisma.invoice.findUnique({
         where: { id: invoiceId },
         include: {
-          derivedAddress: true,
+          address: true,
           merchant: true
         }
       })
@@ -124,14 +124,14 @@ export class TatumNotificationService {
       }
 
       // Verify the address matches
-      if (invoice.derivedAddress.address.toLowerCase() !== webhookPayload.address.toLowerCase()) {
-        throw new Error(`Address mismatch: expected ${invoice.derivedAddress.address}, got ${webhookPayload.address}`)
+      if (invoice.address.address.toLowerCase() !== webhookPayload.address.toLowerCase()) {
+        throw new Error(`Address mismatch: expected ${invoice.address.address}, got ${webhookPayload.address}`)
       }
 
       // Create webhook notification record
       await prisma.webhookNotification.create({
         data: {
-          derivedAddressId: invoice.derivedAddressId,
+          addressId: invoice.addressId,
           invoiceId: invoice.id,
           txHash: webhookPayload.txId,
           amount: parseFloat(webhookPayload.amount),
@@ -144,13 +144,12 @@ export class TatumNotificationService {
         }
       })
 
-      // Update derived address activity
-      await prisma.derivedAddress.update({
-        where: { id: invoice.derivedAddressId },
+      // Update address activity
+      await prisma.address.update({
+        where: { id: invoice.addressId },
         data: {
-          lastNotificationAt: new Date(),
           lastActivityAt: new Date(),
-          firstUsedAt: invoice.derivedAddress.firstUsedAt || new Date()
+          firstUsedAt: invoice.address.firstUsedAt || new Date()
         }
       })
 
@@ -190,23 +189,56 @@ export class TatumNotificationService {
         }
       })
 
-      // Update merchant balance
-      const globalWallet = await tx.globalHDWallet.findUnique({
-        where: { id: invoice.derivedAddress.globalWalletId }
-      })
-
-      if (globalWallet) {
-        await tx.merchantBalance.updateMany({
+      // Find or create merchant balance for this currency/network
+      try {
+        // Get the wallet associated with this invoice
+        const wallet = await tx.wallet.findFirst({
           where: {
-            merchantId: invoice.merchantId,
-            globalWalletId: globalWallet.id
-          },
-          data: {
-            balance: { increment: paymentAmount },
-            totalReceived: { increment: paymentAmount },
-            lastUpdated: new Date()
+            id: invoice.address.walletId
           }
         })
+
+        if (!wallet) {
+          throw new Error(`Wallet not found for invoice ${invoice.id}`)
+        }
+
+        // Find existing merchant balance or create one
+        let merchantBalance = await tx.merchantBalance.findFirst({
+          where: {
+            merchantId: invoice.merchantId,
+            walletId: wallet.id
+          }
+        })
+
+        if (!merchantBalance) {
+          // Create merchant balance if it doesn't exist
+          merchantBalance = await tx.merchantBalance.create({
+            data: {
+              merchantId: invoice.merchantId,
+              walletId: wallet.id,
+              balance: 0,
+              lockedBalance: 0,
+              totalReceived: 0,
+              totalWithdrawn: 0
+            }
+          })
+          console.log(`💰 Created new merchant balance for ${webhookPayload.asset} wallet`)
+        }
+
+        // Update merchant balance
+        await tx.merchantBalance.update({
+          where: { id: merchantBalance.id },
+          data: {
+            balance: { increment: paymentAmount },
+            totalReceived: { increment: paymentAmount }
+          }
+        })
+        
+        console.log(`💰 Updated merchant balance: +${paymentAmount} ${webhookPayload.asset} for merchant ${invoice.merchantId}`)
+        
+      } catch (balanceError) {
+        console.error(`❌ Failed to update merchant balance:`, balanceError)
+        // Continue with payment processing even if balance update fails
       }
 
       // Create transaction record
@@ -225,28 +257,9 @@ export class TatumNotificationService {
       })
     })
 
-    // Remove Tatum subscription if invoice is fully paid
+    // Log successful payment processing (subscriptions not needed with KMS system)
     const invoiceStatus = this.determineInvoiceStatus(invoice.amount, invoice.amountPaid + paymentAmount)
-    if (invoiceStatus === 'PAID' && invoice.derivedAddress.tatumSubscriptionId) {
-      try {
-        console.log(`🗑️ Removing Tatum subscription for paid invoice: ${invoice.id}`)
-        await this.removeSubscription(invoice.derivedAddress.tatumSubscriptionId)
-        
-        // Update derived address to mark subscription as inactive
-        await prisma.derivedAddress.update({
-          where: { id: invoice.derivedAddressId },
-          data: { 
-            subscriptionActive: false,
-            tatumSubscriptionId: null // Clear the subscription ID
-          }
-        })
-        
-        console.log(`✅ Subscription removed successfully for invoice: ${invoice.id}`)
-      } catch (subscriptionError) {
-        // Don't fail the whole payment processing if subscription removal fails
-        console.warn(`⚠️ Failed to remove subscription for invoice ${invoice.id}:`, subscriptionError)
-      }
-    }
+    console.log(`✅ Payment processed successfully: ${invoiceStatus} for invoice ${invoice.id}`)
 
     // Send webhook to merchant if configured
     if (invoice.merchant.webhookUrl) {
@@ -327,70 +340,49 @@ export class TatumNotificationService {
   }
 
   /**
-   * Cleanup expired subscriptions
+   * Cleanup expired invoices (KMS system - no subscriptions needed)
    */
-  async cleanupExpiredSubscriptions(): Promise<void> {
+  async cleanupExpiredInvoices(): Promise<void> {
     try {
-      console.log('🧹 Cleaning up expired subscriptions...')
+      console.log('🧹 Cleaning up expired invoices...')
 
-      // Find expired invoices with active subscriptions
+      // Find expired invoices
       const expiredInvoices = await prisma.invoice.findMany({
         where: {
           expiresAt: { lt: new Date() },
-          status: { in: ['PENDING', 'UNDERPAID'] },
-          derivedAddress: {
-            subscriptionActive: true,
-            tatumSubscriptionId: { not: null }
-          }
-        },
-        include: {
-          derivedAddress: true
+          status: { in: ['PENDING', 'UNDERPAID'] }
         }
       })
 
-      console.log(`Found ${expiredInvoices.length} expired subscriptions to cleanup`)
+      console.log(`Found ${expiredInvoices.length} expired invoices to cleanup`)
 
-      for (const invoice of expiredInvoices) {
-        if (invoice.derivedAddress.tatumSubscriptionId) {
-          // Remove Tatum subscription
-          await this.removeSubscription(invoice.derivedAddress.tatumSubscriptionId)
-
-          // Update database
-          await prisma.derivedAddress.update({
-            where: { id: invoice.derivedAddressId },
-            data: {
-              subscriptionActive: false,
-              tatumSubscriptionId: null
-            }
-          })
-
-          // Update invoice status
-          await prisma.invoice.update({
-            where: { id: invoice.id },
-            data: { status: 'EXPIRED' }
-          })
-        }
+      // Update expired invoices status
+      if (expiredInvoices.length > 0) {
+        await prisma.invoice.updateMany({
+          where: {
+            id: { in: expiredInvoices.map(inv => inv.id) }
+          },
+          data: { status: 'EXPIRED' }
+        })
       }
 
-      console.log(`✅ Cleaned up ${expiredInvoices.length} expired subscriptions`)
+      console.log(`✅ Cleaned up ${expiredInvoices.length} expired invoices`)
 
     } catch (error) {
-      console.error('❌ Failed to cleanup expired subscriptions:', error)
+      console.error('❌ Failed to cleanup expired invoices:', error)
     }
   }
 
   /**
-   * Get subscription health status
+   * Get webhook system health status
    */
-  async getSubscriptionHealth(): Promise<{
-    totalActive: number
+  async getSystemHealth(): Promise<{
+    totalAddresses: number
     totalNotifications: number
     recentActivity: number
   }> {
-    const [activeCount, totalNotifications, recentActivity] = await Promise.all([
-      prisma.derivedAddress.count({
-        where: { subscriptionActive: true }
-      }),
+    const [addressCount, totalNotifications, recentActivity] = await Promise.all([
+      prisma.address.count(),
       prisma.webhookNotification.count(),
       prisma.webhookNotification.count({
         where: {
@@ -402,14 +394,14 @@ export class TatumNotificationService {
     ])
 
     return {
-      totalActive: activeCount,
+      totalAddresses: addressCount,
       totalNotifications,
       recentActivity
     }
   }
 
   /**
-   * Start periodic cleanup process for expired subscriptions
+   * Start periodic cleanup process for expired invoices
    * Runs every 4 hours in production
    */
   private startPeriodicCleanup(): void {
@@ -417,8 +409,8 @@ export class TatumNotificationService {
 
     setInterval(async () => {
       try {
-        console.log('🧹 [CLEANUP] Starting periodic subscription cleanup...')
-        await this.cleanupExpiredSubscriptions()
+        console.log('🧹 [CLEANUP] Starting periodic invoice cleanup...')
+        await this.cleanupExpiredInvoices()
         console.log('✅ [CLEANUP] Periodic cleanup completed')
       } catch (error) {
         console.error('❌ [CLEANUP] Periodic cleanup failed:', error)
@@ -429,7 +421,7 @@ export class TatumNotificationService {
   }
 
   /**
-   * Force cleanup of all expired subscriptions (manual trigger)
+   * Force cleanup of all expired invoices (manual trigger)
    */
   async forceCleanup(): Promise<{
     cleaned: number
@@ -441,64 +433,31 @@ export class TatumNotificationService {
     let errors = 0
 
     try {
-      console.log('🧹 [FORCE-CLEANUP] Starting comprehensive cleanup...')
+      console.log('🧹 [FORCE-CLEANUP] Starting comprehensive invoice cleanup...')
 
-      // Find all expired invoices with active subscriptions
+      // Find all expired invoices
       const expiredInvoices = await prisma.invoice.findMany({
         where: {
-          OR: [
-            // Invoices that expired
-            {
-              expiresAt: { lt: new Date() },
-              status: { in: ['PENDING', 'UNDERPAID'] }
-            },
-            // Invoices that were paid/cancelled but still have active subscriptions
-            {
-              status: { in: ['PAID', 'EXPIRED', 'CANCELLED'] },
-              derivedAddress: {
-                subscriptionActive: true
-              }
-            }
-          ],
-          derivedAddress: {
-            subscriptionActive: true,
-            tatumSubscriptionId: { not: null }
-          }
-        },
-        include: {
-          derivedAddress: true
+          expiresAt: { lt: new Date() },
+          status: { in: ['PENDING', 'UNDERPAID'] }
         }
       })
 
-      console.log(`Found ${expiredInvoices.length} subscriptions to cleanup`)
+      console.log(`Found ${expiredInvoices.length} expired invoices to cleanup`)
 
-      for (const invoice of expiredInvoices) {
+      if (expiredInvoices.length > 0) {
         try {
-          if (invoice.derivedAddress.tatumSubscriptionId) {
-            // Remove Tatum subscription
-            await this.removeSubscription(invoice.derivedAddress.tatumSubscriptionId)
-
-            // Update database
-            await prisma.derivedAddress.update({
-              where: { id: invoice.derivedAddressId },
-              data: {
-                subscriptionActive: false,
-                tatumSubscriptionId: null
-              }
-            })
-
-            // Update invoice status if expired
-            if (invoice.expiresAt < new Date() && ['PENDING', 'UNDERPAID'].includes(invoice.status)) {
-              await prisma.invoice.update({
-                where: { id: invoice.id },
-                data: { status: 'EXPIRED' }
-              })
-            }
-
-            cleaned++
-          }
+          // Update all expired invoices in batch
+          await prisma.invoice.updateMany({
+            where: {
+              id: { in: expiredInvoices.map(inv => inv.id) }
+            },
+            data: { status: 'EXPIRED' }
+          })
+          
+          cleaned = expiredInvoices.length
         } catch (error) {
-          console.error(`Failed to cleanup subscription for invoice ${invoice.id}:`, error)
+          console.error('Failed to batch update expired invoices:', error)
           errors++
         }
       }
@@ -515,13 +474,12 @@ export class TatumNotificationService {
   }
 
   /**
-   * Get detailed statistics about subscriptions
+   * Get detailed statistics about KMS webhook system
    */
   async getDetailedStats(): Promise<{
-    subscriptions: {
-      active: number
-      expired: number
+    addresses: {
       total: number
+      active: number
     }
     invoices: {
       pending: number
@@ -546,8 +504,8 @@ export class TatumNotificationService {
     const lastMonth = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000)
 
     const [
-      activeSubscriptions,
-      totalDerivedAddresses,
+      totalAddresses,
+      activeAddresses,
       pendingInvoices,
       paidInvoices,
       expiredInvoices,
@@ -557,8 +515,8 @@ export class TatumNotificationService {
       notifications7d,
       notifications30d
     ] = await Promise.all([
-      prisma.derivedAddress.count({ where: { subscriptionActive: true } }),
-      prisma.derivedAddress.count(),
+      prisma.address.count(),
+      prisma.address.count({ where: { assignedToInvoice: { not: null } } }),
       prisma.invoice.count({ where: { status: 'PENDING' } }),
       prisma.invoice.count({ where: { status: 'PAID' } }),
       prisma.invoice.count({ where: { status: 'EXPIRED' } }),
@@ -588,10 +546,9 @@ export class TatumNotificationService {
       : 0
 
     return {
-      subscriptions: {
-        active: activeSubscriptions,
-        expired: totalDerivedAddresses - activeSubscriptions,
-        total: totalDerivedAddresses
+      addresses: {
+        total: totalAddresses,
+        active: activeAddresses
       },
       invoices: {
         pending: pendingInvoices,
