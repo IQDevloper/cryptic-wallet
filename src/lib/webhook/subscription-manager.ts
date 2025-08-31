@@ -1,4 +1,3 @@
-import { TatumSDK, Network, Ethereum, Bitcoin } from '@tatumio/tatum'
 
 interface TatumWebhookSubscription {
   id: string

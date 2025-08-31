@@ -10,19 +10,22 @@ import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { trpc } from '@/lib/trpc/client'
 import { toast } from 'sonner'
+import { getSupportedCurrencies } from '@/lib/crypto-config'
+import Image from 'next/image'
 
 interface CreateInvoiceFormProps {
   merchantId: string
 }
 
-const CURRENCIES = [
-  { code: 'USDT', name: 'Tether USD', networks: ['ethereum', 'bsc', 'tron', 'polygon'] },
-  { code: 'BTC', name: 'Bitcoin', networks: ['bitcoin'] },
-  { code: 'ETH', name: 'Ethereum', networks: ['ethereum'] },
-  { code: 'BNB', name: 'BNB', networks: ['bsc'] },
-  { code: 'TRX', name: 'TRON', networks: ['tron'] },
-  { code: 'MATIC', name: 'Polygon', networks: ['polygon'] }
-]
+// Determine if we're in testnet mode (this could come from an env variable or API)
+const isTestnet = process.env.NEXT_PUBLIC_TATUM_ENVIRONMENT === 'testnet'
+
+// Get supported currencies from our crypto configuration
+const CURRENCIES = getSupportedCurrencies().map(currency => ({
+  ...currency,
+  // Add testnet suffix for display in testnet mode
+  name: isTestnet && !currency.name.includes('Testnet') ? `${currency.name} (Testnet)` : currency.name
+}))
 
 export function CreateInvoiceForm({ merchantId }: CreateInvoiceFormProps) {
   const router = useRouter()
@@ -74,7 +77,14 @@ export function CreateInvoiceForm({ merchantId }: CreateInvoiceFormProps) {
     <div className="max-w-2xl mx-auto">
       <Card>
         <CardHeader>
-          <CardTitle>Create New Invoice</CardTitle>
+          <CardTitle className="flex items-center gap-2">
+            Create New Invoice
+            {isTestnet && (
+              <span className="text-sm font-normal text-yellow-600 bg-yellow-100 px-2 py-1 rounded">
+                Testnet Mode
+              </span>
+            )}
+          </CardTitle>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-6">
@@ -108,7 +118,16 @@ export function CreateInvoiceForm({ merchantId }: CreateInvoiceFormProps) {
                   <SelectContent>
                     {CURRENCIES.map((currency) => (
                       <SelectItem key={currency.code} value={currency.code}>
-                        {currency.code} - {currency.name}
+                        <div className="flex items-center gap-2">
+                          <Image 
+                            src={currency.icon} 
+                            alt={currency.code} 
+                            width={20} 
+                            height={20} 
+                            className="rounded-full"
+                          />
+                          <span>{currency.code} - {currency.name}</span>
+                        </div>
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -129,8 +148,8 @@ export function CreateInvoiceForm({ merchantId }: CreateInvoiceFormProps) {
                   </SelectTrigger>
                   <SelectContent>
                     {selectedCurrencyData?.networks.map((network) => (
-                      <SelectItem key={network} value={network}>
-                        {network.toUpperCase()}
+                      <SelectItem key={network.network} value={network.network}>
+                        {network.displayName || network.network.toUpperCase()}
                       </SelectItem>
                     ))}
                   </SelectContent>

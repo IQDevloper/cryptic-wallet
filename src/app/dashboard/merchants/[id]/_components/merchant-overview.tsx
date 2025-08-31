@@ -15,9 +15,6 @@ export function MerchantOverview({ merchantId }: MerchantOverviewProps) {
   const { data: balances, isLoading, error } = trpc.merchant.getBalances.useQuery({
     merchantId
   })
-  console.log('====================================');
-  console.log(balances);
-  console.log('====================================');
   if (isLoading) {
     return (
       <div className="space-y-4">
@@ -106,7 +103,11 @@ export function MerchantOverview({ merchantId }: MerchantOverviewProps) {
                 </div>
               </div>
               <Badge variant="secondary" className="w-fit text-xs">
-                {balance.network.toUpperCase()}
+                {balance.network === 'tron' ? 'TRC20' : 
+                 balance.network === 'ethereum' ? 'ERC20' : 
+                 balance.network === 'bsc' ? 'BEP20' : 
+                 balance.network === 'polygon' ? 'MATIC' :
+                 balance.network.toUpperCase()}
               </Badge>
             </CardHeader>
             <CardContent>

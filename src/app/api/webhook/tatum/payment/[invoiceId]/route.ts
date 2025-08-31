@@ -28,9 +28,9 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     // Get webhook payload
     const payload = await request.json()
     
-    // Verify webhook signature if secret key is configured
+    // Verify webhook signature using Tatum HMAC authentication
     if (process.env.WEBHOOK_SECRET_KEY) {
-      const signature = request.headers.get('x-webhook-signature')
+      const signature = request.headers.get('x-payload-hash')
       if (signature) {
         const expectedSignature = crypto
           .createHmac('sha256', process.env.WEBHOOK_SECRET_KEY)
@@ -38,22 +38,28 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
           .digest('hex')
 
         if (signature !== expectedSignature) {
-          console.error('❌ [INVOICE-WEBHOOK] Invalid webhook signature')
+          console.error('❌ [INVOICE-WEBHOOK] Invalid HMAC signature')
           return NextResponse.json({ error: 'Invalid signature' }, { status: 401 })
         }
+        
+        console.log('✅ [INVOICE-WEBHOOK] HMAC signature verified')
+      } else {
+        console.warn('⚠️ [INVOICE-WEBHOOK] No HMAC signature found in x-payload-hash header')
       }
     }
 
     // Log payload for debugging
     console.log('📦 [INVOICE-WEBHOOK] Payload received:', {
       invoiceId,
-      type: payload.subscriptionType,
+      subscriptionType: payload.subscriptionType,
       address: payload.address,
       amount: payload.amount,
+      asset: payload.asset,
       txId: payload.txId,
-      confirmed: payload.confirmed,
+      type: payload.type,
       chain: payload.chain,
-      blockNumber: payload.blockNumber
+      blockNumber: payload.blockNumber,
+      counterAddress: payload.counterAddress
     })
 
     // Process the webhook notification

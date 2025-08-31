@@ -79,7 +79,12 @@ async function main() {
 
     const { networkCode, ...currencyWithoutNetworkCode } = currencyData
     await prisma.currency.upsert({
-      where: { code: currencyData.code },
+      where: { 
+        baseCurrencyId_networkId: {
+          baseCurrencyId: currencyWithoutNetworkCode.baseCurrencyId,
+          networkId: network.id
+        }
+      },
       update: {
         ...currencyWithoutNetworkCode,
         networkId: network.id,

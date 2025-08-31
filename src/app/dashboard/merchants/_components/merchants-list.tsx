@@ -29,9 +29,7 @@ type MerchantListItem = {
   isActive: boolean
   webhookUrl: string | null
   createdAt: string
-  _count: {
-    invoices: number
-  }
+  _count: { invoices: number }
   stats: {
     totalInvoices: number
     totalRevenue: string
@@ -40,16 +38,13 @@ type MerchantListItem = {
 }
 
 // Format currency helper function
-function formatCurrency(amount: number | string): string {
-  const num = typeof amount === 'string' ? parseFloat(amount) : amount
-  return new Intl.NumberFormat('en-US', {
+const formatCurrency = (amount: number | string): string => 
+  new Intl.NumberFormat('en-US', {
     style: 'currency',
     currency: 'USD',
-  }).format(num)
-}
+  }).format(typeof amount === 'string' ? parseFloat(amount) : amount)
 
 export function MerchantsList() {
-  const [selectedMerchant, setSelectedMerchant] = useState<MerchantListItem | null>(null)
   const { data, isLoading, error } = trpc.merchant.list.useQuery({
     page: 1,
     limit: 50,
@@ -136,13 +131,7 @@ export function MerchantsList() {
                           Edit Settings
                         </Link>
                       </DropdownMenuItem>
-                      <DropdownMenuItem
-                        className="text-destructive"
-                        onClick={() => {
-                          setSelectedMerchant(merchant)
-                          // TODO: Add suspend functionality
-                        }}
-                      >
+                      <DropdownMenuItem className="text-destructive">
                         Suspend Merchant
                       </DropdownMenuItem>
                     </DropdownMenuContent>

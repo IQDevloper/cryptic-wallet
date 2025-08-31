@@ -25,6 +25,7 @@ import { toast } from 'sonner'
 import { trpc } from '@/lib/trpc/client'
 import type { Merchant } from '@prisma/client'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import { useRouter } from 'next/navigation'
 
 const merchantSettingsSchema = z.object({
     name: z.string().min(1, 'Name is required'),
@@ -36,6 +37,8 @@ const merchantSettingsSchema = z.object({
 export function MerchantSettings({ merchant }: { merchant: Merchant }) {
     const [isEditing, setIsEditing] = useState(false)
     const [isSuspendDialogOpen, setIsSuspendDialogOpen] = useState(false)
+    const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false)
+    const router = useRouter()
     
     const updateMerchant = trpc.merchant.update.useMutation({
         onSuccess: () => {
@@ -54,6 +57,16 @@ export function MerchantSettings({ merchant }: { merchant: Merchant }) {
         },
         onError: () => {
             toast.error('Failed to update merchant status')
+        }
+    })
+
+    const deleteMerchant = trpc.merchant.delete.useMutation({
+        onSuccess: () => {
+            toast.success('Merchant deleted successfully')
+            router.push('/dashboard/merchants')
+        },
+        onError: () => {
+            toast.error('Failed to delete merchant')
         }
     })
 
@@ -78,6 +91,12 @@ export function MerchantSettings({ merchant }: { merchant: Merchant }) {
         updateStatus.mutate({
             merchantId: merchant.id,
             isActive: false
+        })
+    }
+
+    async function handleDeleteMerchant() {
+        deleteMerchant.mutate({
+            merchantId: merchant.id
         })
     }
 
@@ -200,6 +219,22 @@ export function MerchantSettings({ merchant }: { merchant: Merchant }) {
                             {updateStatus.isPending ? 'Suspending...' : 'Suspend'}
                         </Button>
                     </div>
+                    
+                    <div className="flex items-center justify-between rounded-lg border border-destructive p-4">
+                        <div className="space-y-1">
+                            <h4 className="text-sm font-semibold">Delete Merchant</h4>
+                            <p className="text-sm text-muted-foreground">
+                                Permanently delete this merchant and all associated data
+                            </p>
+                        </div>
+                        <Button 
+                            variant="destructive"
+                            onClick={() => setIsDeleteDialogOpen(true)}
+                            disabled={deleteMerchant.isPending}
+                        >
+                            {deleteMerchant.isPending ? 'Deleting...' : 'Delete'}
+                        </Button>
+                    </div>
                 </CardContent>
             </Card>
 
@@ -210,6 +245,16 @@ export function MerchantSettings({ merchant }: { merchant: Merchant }) {
                 title="Suspend Merchant"
                 description={`Are you sure you want to suspend ${merchant.name}? This will immediately stop all payment processing for this merchant.`}
                 confirmText="Suspend Merchant"
+                variant="destructive"
+            />
+
+            <ConfirmDialog
+                open={isDeleteDialogOpen}
+                onOpenChange={setIsDeleteDialogOpen}
+                onConfirm={handleDeleteMerchant}
+                title="Delete Merchant"
+                description={`Are you sure you want to permanently delete ${merchant.name}? This action cannot be undone and will delete all associated invoices, wallets, and payment history.`}
+                confirmText="Delete Merchant"
                 variant="destructive"
             />
         </div>

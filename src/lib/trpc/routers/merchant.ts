@@ -4,23 +4,30 @@ import { createTRPCRouter, userAuthenticatedProcedure, merchantAuthenticatedProc
 import crypto from 'crypto'
 import type { MerchantBalance, GlobalHDWallet } from '@prisma/client'
 
+// Shared validation schemas
+const merchantIdSchema = z.object({ merchantId: z.string().cuid() })
+const paginationSchema = z.object({
+  page: z.number().min(1).default(1),
+  limit: z.number().min(1).max(100).default(20),
+})
+
+// Network fees configuration
+const NETWORK_FEES: Record<string, number> = {
+  ethereum: 10.0,
+  bsc: 1.0,
+  tron: 1.0,
+  polygon: 0.1,
+  bitcoin: 5.0,
+} as const
+
+const BRIDGE_FEE = 5.0
+
 // Helper function to select optimal withdrawal sources
 function selectOptimalSources(
   currencyBalances: Array<MerchantBalance & { globalWallet: GlobalHDWallet }>,
   amount: number,
   targetNetwork: string
 ) {
-  // Network withdrawal fees (simplified - in production, fetch from API)
-  const networkFees: Record<string, number> = {
-    ethereum: 10.0,  // High gas fees
-    bsc: 1.0,        // Low fees
-    tron: 1.0,       // Low fees
-    polygon: 0.1,    // Ultra low fees
-    bitcoin: 5.0,    // Medium fees
-  }
-
-  // Bridge fees for cross-network transfers (simplified)
-  const bridgeFee = 5.0
 
   // Strategy 1: Check if we can withdraw directly from target network
   const sameNetworkBalance = currencyBalances.find(
@@ -35,7 +42,7 @@ function selectOptimalSources(
       // Direct withdrawal from same network - no bridging needed
       return {
         sources: [{ network: targetNetwork, amount }],
-        totalFees: networkFees[targetNetwork] || 1.0,
+        totalFees: NETWORK_FEES[targetNetwork] || 1.0,
         needsBridging: false,
       }
     }
@@ -46,7 +53,7 @@ function selectOptimalSources(
     .map(cb => ({
       network: cb.globalWallet.network,
       available: parseFloat(cb.balance.toString()) - parseFloat(cb.lockedBalance.toString()),
-      fee: networkFees[cb.globalWallet.network] || 1.0,
+      fee: NETWORK_FEES[cb.globalWallet.network] || 1.0,
     }))
     .filter(b => b.available > 0)
     .sort((a, b) => a.fee - b.fee) // Sort by lowest fees first
@@ -74,7 +81,7 @@ function selectOptimalSources(
 
   // Calculate total fees
   const networkFeesTotal = sources.reduce(
-    (sum, source) => sum + (networkFees[source.network] || 1.0),
+    (sum, source) => sum + (NETWORK_FEES[source.network] || 1.0),
     0
   )
 
@@ -82,7 +89,7 @@ function selectOptimalSources(
   const needsBridging = sources.length > 1 || 
                         (sources.length === 1 && sources[0].network !== targetNetwork)
   
-  const totalFees = networkFeesTotal + (needsBridging ? bridgeFee : 0)
+  const totalFees = networkFeesTotal + (needsBridging ? BRIDGE_FEE : 0)
 
   return {
     sources,
@@ -102,12 +109,10 @@ export const merchantRouter = createTRPCRouter({
     }
   }),
 
-  // List merchants (for admin/dashboard)
+  // List merchants (for admin/dashboard)  
   list: userAuthenticatedProcedure
     .input(
-      z.object({
-        page: z.number().min(1).default(1),
-        limit: z.number().min(1).max(100).default(20),
+      paginationSchema.extend({
         search: z.string().optional(),
         status: z.enum(['active', 'inactive']).optional(),
       })
@@ -211,7 +216,7 @@ export const merchantRouter = createTRPCRouter({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      // Validate we have active currencies before starting
+      // Get active currencies with network and base currency data
       const activeCurrencies = await ctx.prisma.currency.findMany({
         where: { isActive: true },
         include: { 
@@ -227,10 +232,7 @@ export const merchantRouter = createTRPCRouter({
         })
       }
 
-      console.log(`📋 Creating merchant with ${activeCurrencies.length} currencies`)
-
       // Generate API key
-      const crypto = await import('crypto')
       const apiKey = 'mk_' + crypto.randomBytes(32).toString('hex')
       const apiKeyHash = crypto.createHash('sha256').update(apiKey).digest('hex')
 
@@ -249,30 +251,27 @@ export const merchantRouter = createTRPCRouter({
           },
         })
 
-        console.log(`👤 Created merchant: ${merchant.id}`)
-
-        // Initialize merchant balances for all global HD wallets
-        console.log(`💰 Initializing merchant balances using Global HD Wallet system`)
-        
-        // Get all active global HD wallets
-        const globalWallets = await tx.globalHDWallet.findMany({
-          where: { status: 'ACTIVE' }
-        })
-        
-        if (globalWallets.length === 0) {
-          throw new TRPCError({
-            code: 'PRECONDITION_FAILED',
-            message: 'No global HD wallets found. Please initialize global wallets first.',
-          })
-        }
-        
-        console.log(`🔄 Creating merchant balances for ${globalWallets.length} global wallets`)
-        
+        // Initialize merchant balances for all active currencies
         const balanceCreationResults = []
         
-        // Create merchant balance record for each global wallet
-        for (const globalWallet of globalWallets) {
+        // Create merchant balance record for each active currency
+        for (const currency of activeCurrencies) {
           try {
+            // Find or create corresponding GlobalHDWallet for this currency/network
+            const globalWallet = await tx.globalHDWallet.findFirst({
+              where: {
+                currency: currency.baseCurrency.code,
+                network: currency.network.code,
+                contractAddress: currency.contractAddress,
+                status: 'ACTIVE'
+              }
+            })
+
+            if (!globalWallet) {
+              // Skip silently - this is expected for currencies without initialized wallets
+              continue
+            }
+
             const merchantBalance = await tx.merchantBalance.create({
               data: {
                 merchantId: merchant.id,
@@ -285,21 +284,20 @@ export const merchantRouter = createTRPCRouter({
             })
             
             balanceCreationResults.push({
-              currency: globalWallet.currency,
-              network: globalWallet.network,
-              contractAddress: globalWallet.contractAddress,
+              currency: currency.baseCurrency.code,
+              network: currency.network.code,
+              contractAddress: currency.contractAddress,
               balanceId: merchantBalance.id,
               globalWalletId: globalWallet.id,
+              currencyId: currency.id,
               success: true
             })
             
-            console.log(`✅ Created balance for ${globalWallet.currency} on ${globalWallet.network}`)
           } catch (error) {
-            console.error(`❌ Failed to create balance for ${globalWallet.currency} on ${globalWallet.network}:`, error)
             
             throw new TRPCError({
               code: 'INTERNAL_SERVER_ERROR',
-              message: `Failed to create balance for ${globalWallet.currency} on ${globalWallet.network}. Error: ${error instanceof Error ? error.message : 'Unknown error'}`,
+              message: `Failed to create balance for ${currency.baseCurrency.code} on ${currency.network.code}. Error: ${error instanceof Error ? error.message : 'Unknown error'}`,
             })
           }
         }
@@ -310,7 +308,6 @@ export const merchantRouter = createTRPCRouter({
         }
       })
 
-      console.log(`🎉 Successfully created merchant ${result.merchant.id} with ${result.balances.length} currency balances`)
 
       return {
         id: result.merchant.id,
@@ -326,7 +323,7 @@ export const merchantRouter = createTRPCRouter({
 
   // Get merchant by ID
   getById: userOwnsMerchantProcedure
-    .input(z.object({ merchantId: z.string().cuid() }))
+    .input(merchantIdSchema)
     .query(async ({ ctx }) => {
       // Merchant is already available from userOwnsMerchantProcedure
       return ctx.merchant
@@ -334,7 +331,7 @@ export const merchantRouter = createTRPCRouter({
 
   // Regenerate API key
   regenerateApiKey: userOwnsMerchantProcedure
-    .input(z.object({ merchantId: z.string().cuid() }))
+    .input(merchantIdSchema)
     .mutation(async ({ ctx }) => {
       const crypto = await import('crypto')
       const newApiKey = 'mk_' + crypto.randomBytes(32).toString('hex')
@@ -432,8 +429,7 @@ export const merchantRouter = createTRPCRouter({
 
   updateWebhookUrl: userOwnsMerchantProcedure
     .input(
-      z.object({
-        merchantId: z.string(),
+      merchantIdSchema.extend({
         webhookUrl: z.string().url().optional(),
       })
     )
@@ -448,8 +444,7 @@ export const merchantRouter = createTRPCRouter({
 
   update: userOwnsMerchantProcedure
     .input(
-      z.object({
-        merchantId: z.string(),
+      merchantIdSchema.extend({
         name: z.string().optional(),
         businessName: z.string().optional(),
         businessAddress: z.string().optional(),
@@ -469,8 +464,7 @@ export const merchantRouter = createTRPCRouter({
 
   updateStatus: userOwnsMerchantProcedure
     .input(
-      z.object({
-        merchantId: z.string(),
+      merchantIdSchema.extend({
         isActive: z.boolean(),
       })
     )
@@ -484,9 +478,9 @@ export const merchantRouter = createTRPCRouter({
     }),
 
   getBalances: userOwnsMerchantProcedure
-    .input(z.object({ merchantId: z.string() }))
+    .input(merchantIdSchema)
     .query(async ({ ctx }) => {
-      // Get merchant balances with base currency info
+      // Get merchant balances with full currency information
       const merchantBalances = await ctx.prisma.merchantBalance.findMany({
         where: { merchantId: ctx.merchant.id },
         include: {
@@ -500,51 +494,56 @@ export const merchantRouter = createTRPCRouter({
         }
       })
 
-      // Get base currency data for images and names
-      const baseCurrencies = await ctx.prisma.baseCurrency.findMany({
-        where: {
-          code: {
-            in: [...new Set(merchantBalances.map(b => b.globalWallet.currency))]
-          }
+      // Get all active currencies to show complete list (including zero balances)
+      const allCurrencies = await ctx.prisma.currency.findMany({
+        where: { isActive: true },
+        include: {
+          baseCurrency: true,
+          network: true
         }
       })
 
-      const baseCurrencyMap = new Map(
-        baseCurrencies.map(bc => [bc.code, bc])
-      )
+      // Create balance map for existing balances
+      const balanceMap = new Map()
+      merchantBalances.forEach(mb => {
+        const key = `${mb.globalWallet.currency}-${mb.globalWallet.network}`
+        balanceMap.set(key, mb)
+      })
 
       // Get prices for all currencies
       const { fetchPricesFromAPI } = await import('@/app/services/price-provider')
-      const currencyCodes = [...new Set(merchantBalances.map(b => b.globalWallet.currency))]
+      const currencyCodes = [...new Set(allCurrencies.map(c => c.baseCurrency.code))]
       let prices: Record<string, number> = {}
       
       try {
         prices = await fetchPricesFromAPI(currencyCodes)
-      } catch (error) {
-        console.error('Failed to fetch prices:', error)
+      } catch {
+        // Use default empty prices if fetch fails
+        prices = {}
       }
 
-      // Return simple balance data
-      return merchantBalances.map(mb => {
-        const baseCurrency = baseCurrencyMap.get(mb.globalWallet.currency)
-        const balance = Number(mb.balance)
-        const price = prices[mb.globalWallet.currency] || 0
+      // Return complete currency list with balances (or zero balances)
+      return allCurrencies.map(currency => {
+        const key = `${currency.baseCurrency.code}-${currency.network.code}`
+        const existingBalance = balanceMap.get(key)
+        const balance = existingBalance ? Number(existingBalance.balance) : 0
+        const price = prices[currency.baseCurrency.code] || 0
         
         return {
-          id: mb.id,
-          currency: mb.globalWallet.currency,
-          network: mb.globalWallet.network,
+          id: existingBalance?.id || `${currency.id}-placeholder`,
+          currency: currency.baseCurrency.code,
+          network: currency.network.code,
           balance,
-          availableBalance: balance - Number(mb.lockedBalance),
-          lockedBalance: Number(mb.lockedBalance),
-          totalReceived: Number(mb.totalReceived),
-          totalWithdrawn: Number(mb.totalWithdrawn),
+          availableBalance: existingBalance ? balance - Number(existingBalance.lockedBalance) : 0,
+          lockedBalance: existingBalance ? Number(existingBalance.lockedBalance) : 0,
+          totalReceived: existingBalance ? Number(existingBalance.totalReceived) : 0,
+          totalWithdrawn: existingBalance ? Number(existingBalance.totalWithdrawn) : 0,
           price,
           value: balance * price,
-          imageUrl: baseCurrency?.imageUrl || null,
-          name: baseCurrency?.name || mb.globalWallet.currency,
-          contractAddress: mb.globalWallet.contractAddress,
-          lastUpdated: mb.lastUpdated.toISOString()
+          imageUrl: currency.baseCurrency.imageUrl || null,
+          name: currency.baseCurrency.name,
+          contractAddress: currency.contractAddress,
+          lastUpdated: existingBalance?.lastUpdated.toISOString() || new Date().toISOString()
         }
       }).sort((a, b) => b.value - a.value)
     }),
@@ -552,12 +551,11 @@ export const merchantRouter = createTRPCRouter({
   // Unified withdrawal endpoint for cross-network transfers
   requestWithdrawal: userOwnsMerchantProcedure
     .input(
-      z.object({
-        merchantId: z.string(),
-        currency: z.string(), // "USDT", "BTC", "ETH"
+      merchantIdSchema.extend({
+        currency: z.string().min(1).max(10),
         amount: z.number().positive(),
-        targetNetwork: z.string(), // Target network to withdraw to
-        targetAddress: z.string(), // User's wallet address on target network
+        targetNetwork: z.string().min(1).max(20),
+        targetAddress: z.string().min(10).max(100),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -641,8 +639,7 @@ export const merchantRouter = createTRPCRouter({
         return withdrawalRecord
       })
 
-      // TODO: Trigger async withdrawal processing
-      // This would involve Tatum API calls, bridge services, etc.
+      // Async withdrawal processing would be triggered here in production
       
       return {
         withdrawalId: withdrawal.id,
@@ -660,8 +657,7 @@ export const merchantRouter = createTRPCRouter({
 
   invoices: userOwnsMerchantProcedure
     .input(
-      z.object({
-        merchantId: z.string(),
+      merchantIdSchema.extend({
         page: z.number().min(1).default(1),
         limit: z.number().min(1).max(100).default(10),
         search: z.string().optional(),
@@ -713,5 +709,56 @@ export const merchantRouter = createTRPCRouter({
           pages: Math.ceil(total / input.limit),
         },
       }
+    }),
+
+  delete: userOwnsMerchantProcedure
+    .input(merchantIdSchema)
+    .mutation(async ({ ctx }) => {
+      // Use transaction to ensure all related data is cleaned up
+      await ctx.prisma.$transaction(async (tx) => {
+        // Delete related data in the correct order to respect foreign key constraints
+        
+        // 1. Delete transactions first
+        await tx.transaction.deleteMany({
+          where: {
+            invoice: {
+              merchantId: ctx.merchant.id
+            }
+          }
+        })
+
+        // 2. Delete derived addresses (this will also handle invoices due to cascade)
+        await tx.derivedAddress.deleteMany({
+          where: {
+            invoices: {
+              some: {
+                merchantId: ctx.merchant.id
+              }
+            }
+          }
+        })
+
+        // 3. Delete invoices
+        await tx.invoice.deleteMany({
+          where: { merchantId: ctx.merchant.id }
+        })
+
+        // 4. Delete merchant balances
+        await tx.merchantBalance.deleteMany({
+          where: { merchantId: ctx.merchant.id }
+        })
+
+        // 5. Delete withdrawals
+        await tx.withdrawal.deleteMany({
+          where: { merchantId: ctx.merchant.id }
+        })
+
+        // 6. Finally delete the merchant
+        await tx.merchant.delete({
+          where: { id: ctx.merchant.id }
+        })
+      })
+
+      return { success: true }
     }),
 })

@@ -7,21 +7,20 @@ interface TatumSubscriptionRequest {
   address: string
   chain: string
   invoiceId: string
+  currency: string  // "ETH", "USDT", "BTC", etc.
+  contractAddress?: string  // Required for tokens like USDT
 }
 
 interface TatumWebhookPayload {
-  subscriptionType: string
-  txId: string
-  blockNumber?: number
-  asset: string
-  amount: string
   address: string
-  counterAddress?: string
-  chain: string
-  mempool?: boolean
-  confirmed?: boolean
-  date: number
-  reference?: string
+  amount: string
+  asset: string  // "ETH", "BTC", etc.
+  blockNumber: number
+  counterAddress: string  // The sender address
+  txId: string
+  type: string  // "native" or "token"
+  chain: string  // "ethereum-mainnet", etc.
+  subscriptionType: string  // "ADDRESS_EVENT"
   metadata?: Record<string, any>
 }
 
@@ -29,7 +28,10 @@ export class TatumNotificationService {
   private readonly webhookBaseUrl: string
 
   constructor() {
-    this.webhookBaseUrl = process.env.WEBHOOK_BASE_URL || 'https://yourapp.com/api/webhook'
+    if (!process.env.WEBHOOK_BASE_URL) {
+      throw new Error('WEBHOOK_BASE_URL environment variable is required')
+    }
+    this.webhookBaseUrl = process.env.WEBHOOK_BASE_URL
     
     // Start cleanup process if not already running
     if (process.env.NODE_ENV === 'production') {
@@ -45,7 +47,7 @@ export class TatumNotificationService {
       console.log(`📡 Creating Tatum subscription for address: ${request.address} (${request.chain})`)
 
       // Ensure webhook URL is properly formatted
-      let webhookUrl = `${this.webhookBaseUrl}/tatum/payment/${request.invoiceId}`
+      let webhookUrl = `${this.webhookBaseUrl}/api/webhook/tatum/payment/${request.invoiceId}`
       
       // Tatum requires a publicly accessible URL
       if (webhookUrl.includes('localhost') || webhookUrl.includes('127.0.0.1')) {
@@ -68,7 +70,9 @@ export class TatumNotificationService {
       const subscription = await tatumVAManager.createWebhookSubscription(
         request.chain,
         request.address,
-        webhookUrl
+        webhookUrl,
+        request.currency,
+        request.contractAddress
       )
 
       console.log(`✅ Subscription created: ${subscription.id}`)
@@ -134,7 +138,7 @@ export class TatumNotificationService {
           blockNumber: webhookPayload.blockNumber ? BigInt(webhookPayload.blockNumber) : null,
           confirmations: this.calculateConfirmations(webhookPayload),
           chain: webhookPayload.chain,
-          status: webhookPayload.confirmed ? 'CONFIRMED' : 'PENDING',
+          status: webhookPayload.blockNumber ? 'CONFIRMED' : 'PENDING',
           webhookPayload: webhookPayload as any,
           processedAt: new Date()
         }
@@ -150,8 +154,8 @@ export class TatumNotificationService {
         }
       })
 
-      // Process payment if confirmed
-      if (webhookPayload.confirmed) {
+      // Process payment if confirmed (has block number)
+      if (webhookPayload.blockNumber && webhookPayload.blockNumber > 0) {
         await this.processConfirmedPayment(invoice, webhookPayload)
       }
 
@@ -221,6 +225,29 @@ export class TatumNotificationService {
       })
     })
 
+    // Remove Tatum subscription if invoice is fully paid
+    const invoiceStatus = this.determineInvoiceStatus(invoice.amount, invoice.amountPaid + paymentAmount)
+    if (invoiceStatus === 'PAID' && invoice.derivedAddress.tatumSubscriptionId) {
+      try {
+        console.log(`🗑️ Removing Tatum subscription for paid invoice: ${invoice.id}`)
+        await this.removeSubscription(invoice.derivedAddress.tatumSubscriptionId)
+        
+        // Update derived address to mark subscription as inactive
+        await prisma.derivedAddress.update({
+          where: { id: invoice.derivedAddressId },
+          data: { 
+            subscriptionActive: false,
+            tatumSubscriptionId: null // Clear the subscription ID
+          }
+        })
+        
+        console.log(`✅ Subscription removed successfully for invoice: ${invoice.id}`)
+      } catch (subscriptionError) {
+        // Don't fail the whole payment processing if subscription removal fails
+        console.warn(`⚠️ Failed to remove subscription for invoice ${invoice.id}:`, subscriptionError)
+      }
+    }
+
     // Send webhook to merchant if configured
     if (invoice.merchant.webhookUrl) {
       await this.sendMerchantWebhook(invoice, webhookPayload)
@@ -242,7 +269,7 @@ export class TatumNotificationService {
         currency: webhookPayload.asset,
         txHash: webhookPayload.txId,
         blockNumber: webhookPayload.blockNumber,
-        confirmed: webhookPayload.confirmed,
+        confirmed: webhookPayload.blockNumber > 0,
         timestamp: new Date().toISOString()
       }
 
@@ -271,9 +298,17 @@ export class TatumNotificationService {
    * Calculate confirmation count based on webhook data
    */
   private calculateConfirmations(webhookPayload: TatumWebhookPayload): number {
-    if (webhookPayload.mempool) return 0
-    if (webhookPayload.confirmed) return 6 // Default confirmed state
-    return webhookPayload.blockNumber ? 1 : 0
+    // Tatum v4 ADDRESS_EVENT webhooks come with blockNumber when confirmed
+    // For EVM chains, 1 confirmation triggers the webhook
+    // For UTXO chains, 2 confirmations trigger the webhook
+    if (webhookPayload.blockNumber && webhookPayload.blockNumber > 0) {
+      const utxoAssets = ['BTC', 'LTC', 'BCH', 'DOGE']
+      if (utxoAssets.includes(webhookPayload.asset)) {
+        return 2 // UTXO chains have 2 confirmations when webhook fires
+      }
+      return 1 // EVM chains have 1 confirmation when webhook fires
+    }
+    return 0 // No block number means unconfirmed/mempool transaction
   }
 
   /**

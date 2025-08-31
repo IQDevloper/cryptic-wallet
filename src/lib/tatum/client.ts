@@ -63,11 +63,12 @@ interface DepositAddressResponse {
 }
 
 interface WebhookSubscriptionRequest {
-  type: 'ADDRESS_EVENT' | 'INCOMING_NATIVE_TX' | 'OUTGOING_NATIVE_TX' | 'INCOMING_FUNGIBLE_TX' | 'OUTGOING_FUNGIBLE_TX'
+  type: 'INCOMING_NATIVE_TX' | 'OUTGOING_NATIVE_TX' | 'INCOMING_FUNGIBLE_TX' | 'OUTGOING_FUNGIBLE_TX'
   attr: {
-    address?: string
+    address: string
     chain: string
     url: string
+    contractAddress?: string  // Required for fungible tokens
   }
 }
 
@@ -276,6 +277,43 @@ export class TatumVirtualAccountManager {
 
   constructor() {
     this.httpClient = new TatumHttpClient()
+  }
+
+  /**
+   * Check if currency is the native currency for a given chain
+   */
+  private isNativeCurrency(currency: string, chainId: string): boolean {
+    const nativeMap: Record<string, string> = {
+      // Mainnet
+      bitcoin: 'BTC',
+      'bitcoin-omni': 'BTC',
+      ethereum: 'ETH', 
+      bsc: 'BNB',
+      tron: 'TRX',
+      polygon: 'MATIC',
+      arbitrum: 'ETH', // Arbitrum's native currency is ETH
+      base: 'ETH', // Base's native currency is ETH
+      solana: 'SOL',
+      sui: 'SUI',
+      dogecoin: 'DOGE',
+      litecoin: 'LTC',
+      dash: 'DASH',
+      bcash: 'BCH',
+      // Testnet
+      'bitcoin-testnet': 'BTC',
+      'ethereum-sepolia': 'ETH',
+      'ethereum-testnet': 'ETH',
+      'bsc-testnet': 'BNB',
+      'polygon-amoy': 'MATIC',
+      'arbitrum-sepolia': 'ETH',
+      'base-sepolia': 'ETH',
+      'tron-testnet': 'TRX',
+      'tron-shasta': 'TRX',
+      'solana-devnet': 'SOL',
+      'sui-testnet': 'SUI',
+    }
+    
+    return nativeMap[chainId.toLowerCase()] === currency.toUpperCase()
   }
 
   /**
@@ -545,36 +583,78 @@ export class TatumVirtualAccountManager {
   async createWebhookSubscription(
     chainId: string, 
     address: string, 
-    webhookUrl: string
+    webhookUrl: string,
+    currency: string,
+    contractAddress?: string
   ): Promise<WebhookSubscriptionResponse> {
     // Map chain to Tatum v4 format
     const chainMap: Record<string, string> = {
-      bitcoin: 'bitcoin-mainnet',
-      ethereum: 'ethereum-mainnet',
-      bsc: 'bsc-mainnet',
-      tron: 'tron-mainnet',
-      polygon: 'polygon-mainnet',
-      dogecoin: 'doge-mainnet',
-      litecoin: 'litecoin-core-mainnet',
-      bcash: 'bch-mainnet',
+      // Mainnet chains - use short format
+      bitcoin: 'BTC',
+      'bitcoin-omni': 'BTC', // Bitcoin Omni layer
+      ethereum: 'ETH',
+      bsc: 'BSC',
+      tron: 'TRON',
+      polygon: 'MATIC',
+      arbitrum: 'ARBITRUM',
+      base: 'BASE',
+      solana: 'SOL',
+      sui: 'SUI',
+      dogecoin: 'DOGE',
+      litecoin: 'LTC',
+      dash: 'DASH',
+      bcash: 'BCH',
+      // Testnet chains - use full format
+      'bitcoin-testnet': 'bitcoin-testnet',
+      'ethereum-sepolia': 'ethereum-sepolia',
+      'ethereum-testnet': 'ethereum-sepolia',
+      'bsc-testnet': 'bsc-testnet',
+      'polygon-amoy': 'polygon-amoy',
+      'arbitrum-sepolia': 'arbitrum-sepolia',
+      'base-sepolia': 'base-sepolia',
+      'tron-testnet': 'tron-testnet',
+      'tron-shasta': 'tron-testnet',
+      'solana-devnet': 'solana-devnet',
+      'sui-testnet': 'sui-testnet',
     }
 
     const chain = chainMap[chainId.toLowerCase()]
     if (!chain) {
+      console.error(`[Tatum Webhook] Unsupported chain: ${chainId}`)
+      console.error(`[Tatum Webhook] Available chains:`, Object.keys(chainMap))
       throw new Error(`Unsupported chain for webhooks: ${chainId}. Supported: ${Object.keys(chainMap).join(', ')}`)
     }
 
+    // Determine subscription type based on currency and chain
+    let subscriptionType: WebhookSubscriptionRequest['type']
+    const isNativeToken = this.isNativeCurrency(currency, chainId)
+    
+    if (isNativeToken) {
+      // Monitor native token transfers (ETH, BTC, BNB, etc.)
+      subscriptionType = 'INCOMING_NATIVE_TX'
+    } else {
+      // Monitor token transfers (USDT, USDC, etc.)
+      subscriptionType = 'INCOMING_FUNGIBLE_TX'
+    }
+
+    // Build the request data differently based on subscription type
     const requestData: WebhookSubscriptionRequest = {
-      type: 'ADDRESS_EVENT',  // Changed from ADDRESS_TRANSACTION
+      type: subscriptionType,
       attr: {
         address,
         chain,
-        url: webhookUrl
+        url: webhookUrl,
+        // For INCOMING_FUNGIBLE_TX, contractAddress should NOT be included in attr
+        // Tatum monitors all ERC-20 tokens on the address automatically
       }
     }
 
     try {
-      console.log(`[Tatum Webhook] Creating subscription for ${address} on ${chain}`)
+      console.log(`[Tatum Webhook] Creating ${subscriptionType} subscription for ${address} on ${chain}`, {
+        currency,
+        contractAddress,
+        isNative: isNativeToken
+      })
       
       const response = await this.httpClient.post<WebhookSubscriptionResponse>(
         '/v4/subscription',

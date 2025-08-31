@@ -32,10 +32,36 @@ export const invoiceRouter = createTRPCRouter({
         })
       }
       // Find the global HD wallet for this currency/network combination
+      // Use testnet wallets when in testnet environment
+      const isTestnet = process.env.TATUM_ENVIRONMENT === 'testnet'
+      let possibleNetworks: string[]
+      
+      if (isTestnet) {
+        // Map mainnet networks to their testnet equivalents
+        const networkMap: Record<string, string[]> = {
+          'ethereum': ['ethereum-sepolia', 'ethereum-testnet'],
+          'bitcoin': ['bitcoin-testnet'],
+          'bitcoin-omni': ['bitcoin-testnet'], // Bitcoin Omni layer uses Bitcoin testnet
+          'bsc': ['bsc-testnet'],
+          'polygon': ['polygon-amoy'],
+          'arbitrum': ['arbitrum-sepolia'],
+          'base': ['base-sepolia'],
+          'tron': ['tron-testnet', 'tron-shasta'],
+          'solana': ['solana-devnet'],
+          'sui': ['sui-testnet'],
+          'litecoin': ['litecoin-testnet'],
+          'dogecoin': ['dogecoin-testnet'],
+          'dash': ['dash-testnet']
+        }
+        possibleNetworks = networkMap[input.network.toLowerCase()] || [`${input.network}-testnet`]
+      } else {
+        possibleNetworks = [input.network.toLowerCase()]
+      }
+      
       const globalWallet = await ctx.prisma.globalHDWallet.findFirst({
         where: {
           currency: input.currency.toUpperCase(),
-          network: input.network.toLowerCase(),
+          network: { in: possibleNetworks },
           status: 'ACTIVE'
         }
       })
@@ -88,8 +114,10 @@ export const invoiceRouter = createTRPCRouter({
           try {
             subscriptionId = await tatumNotificationService.createSubscription({
               address: addressResult.address,
-              chain: input.network,
-              invoiceId: invoice.id
+              chain: globalWallet.network, // Use the actual network from the global wallet (e.g., ethereum-sepolia)
+              invoiceId: invoice.id,
+              currency: input.currency.toUpperCase(),
+              contractAddress: globalWallet.contractAddress || undefined
             })
 
             // Update derived address with subscription info
