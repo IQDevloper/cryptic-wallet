@@ -50,7 +50,6 @@ model Merchant {
   taxId             String?
   deletedAt         DateTime?
   // Removed unused fields: defaultCurrency, invoiceExpiry, isVerified, rateLimit, rateLimitWindow, webhookRetryCount, webhookSecret, webhookTimeout
-  addressPools      AddressPool[]
   apiUsageStats     ApiUsageStats[]
   invoices          Invoice[]
   merchantSettings  MerchantSettings?
@@ -81,7 +80,6 @@ model Network {
   updatedAt          DateTime      @updatedAt
   deletedAt          DateTime?
   // Removed rarely used fields: averageBlockTime, explorerUrl, lastBlockChecked, lastStatusCheck, maxWithdrawAmount, minWithdrawAmount, networkStatus, rpcUrl, withdrawFee
-  addressPools       AddressPool[]
   currencies         Currency[]
 
   @@index([code])
@@ -105,7 +103,6 @@ model BaseCurrency {
   deletedAt       DateTime?
   priority        Int            @default(0)
   currencies      Currency[]
-  priceHistory    PriceHistory[]
 
   @@index([code])
   @@index([symbol])
@@ -224,36 +221,11 @@ model Transaction {
   @@map("transactions")
 }
 
-model AddressPool {
-  id               String        @id @default(cuid())
-  address          String        @unique
-  privateKey       String?
-  derivationPath   String?
-  addressIndex     Int?
-  memo             String?
-  status           AddressStatus @default(AVAILABLE)
-  assignedAt       DateTime?
-  usedAt           DateTime?
-  lastUsedAt       DateTime?
-  currentBalance   Decimal       @default(0) @db.Decimal(36, 18)
-  totalReceived    Decimal       @default(0) @db.Decimal(36, 18)
-  transactionCount Int           @default(0)
-  createdAt        DateTime      @default(now())
-  updatedAt        DateTime      @updatedAt
-  deletedAt        DateTime?
-  merchantId       String
-  networkId        String
-  merchant         Merchant      @relation(fields: [merchantId], references: [id], onDelete: Cascade)
-  network          Network       @relation(fields: [networkId], references: [id])
-
-  @@index([address])
-  @@index([merchantId])
-  @@index([networkId])
-  @@index([status])
-  @@index([assignedAt])
-  @@index([deletedAt])
-  @@map("address_pools")
-}
+// AddressPool model removed - replaced with HD wallet architecture:
+// - GlobalHDWallet: Manages global wallets for all currencies/networks
+// - DerivedAddress: Individual payment addresses derived from global wallets
+// - MerchantBalance: Tracks individual merchant balances
+// Pre-generated address pools are no longer needed with HD wallet derivation
 
 model WebhookDelivery {
   id             String           @id @default(cuid())
@@ -379,22 +351,8 @@ model AuditLog {
 // BalanceHistory model removed - was only used by deprecated TatumPaymentService
 // Balance history is now tracked through MerchantBalance updates in the HD wallet system
 
-model PriceHistory {
-  id             String       @id @default(cuid())
-  price          Decimal      @db.Decimal(18, 8)
-  volume24h      Decimal?     @db.Decimal(18, 8)
-  timestamp      DateTime     @default(now())
-  source         String       @default("coingecko")
-  createdAt      DateTime     @default(now())
-  baseCurrencyId String
-  baseCurrency   BaseCurrency @relation(fields: [baseCurrencyId], references: [id], onDelete: Cascade)
-
-  @@unique([baseCurrencyId, timestamp, source])
-  @@index([baseCurrencyId])
-  @@index([timestamp])
-  @@index([source])
-  @@map("price_history")
-}
+// PriceHistory model removed - was intended for tracking cryptocurrency prices over time
+// but was never implemented. Price data can be fetched from external APIs when needed
 
 enum InvoiceStatus {
   PENDING
@@ -430,12 +388,8 @@ enum WebhookEventType {
   TRANSACTION_FAILED
 }
 
-enum AddressStatus {
-  AVAILABLE
-  ASSIGNED
-  USED
-  EXPIRED
-}
+// AddressStatus enum removed - was only used by the obsolete AddressPool model
+// HD wallet system uses DerivedAddress with simpler tracking via assignedToInvoice field
 
 enum NotificationType {
   EMAIL

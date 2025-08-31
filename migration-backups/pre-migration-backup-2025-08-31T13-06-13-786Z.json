@@ -1,0 +1,15 @@
+{
+  "timestamp": "2025-08-31T13:06:13.789Z",
+  "migration": {
+    "from": "insecure-tatum-api",
+    "to": "secure-local-generation",
+    "version": "1.0.0"
+  },
+  "wallets": [],
+  "derivedAddresses": [],
+  "statistics": {
+    "totalWallets": 0,
+    "totalAddresses": 0,
+    "networkBreakdown": {}
+  }
+}
