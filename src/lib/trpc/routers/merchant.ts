@@ -3,24 +3,22 @@ import { TRPCError } from '@trpc/server'
 import { createTRPCRouter, userAuthenticatedProcedure, merchantAuthenticatedProcedure, userOwnsMerchantProcedure } from '../procedures'
 import crypto from 'crypto'
 
-type KMSWallet = {
-  id: string
-  currency: string
-  network: string
-  contractAddress?: string | null
-  kmsSignatureId: string
-  status: string
-}
-
-type MerchantBalanceWithWallet = {
+type MerchantWalletWithSystem = {
   id: string
   merchantId: string
-  walletId: string
-  balance: any // Decimal type
+  systemWalletId: string
+  availableBalance: any // Decimal type
   lockedBalance: any // Decimal type
   totalReceived: any // Decimal type 
   totalWithdrawn: any // Decimal type
-  kmsWallet: KMSWallet
+  systemWallet: {
+    assetNetwork: {
+      asset: { symbol: string, name: string, imageUrl?: string | null }
+      network: { code: string, name: string }
+      contractAddress?: string | null
+    }
+    signatureId: string
+  }
 }
 
 // Shared validation schemas
@@ -43,18 +41,18 @@ const BRIDGE_FEE = 5.0
 
 // Helper function to select optimal withdrawal sources
 function selectOptimalSources(
-  currencyBalances: Array<MerchantBalanceWithWallet>,
+  merchantWallets: Array<MerchantWalletWithSystem>,
   amount: number,
   targetNetwork: string
 ) {
 
   // Strategy 1: Check if we can withdraw directly from target network
-  const sameNetworkBalance = currencyBalances.find(
-    cb => cb.kmsWallet.network === targetNetwork
+  const sameNetworkBalance = merchantWallets.find(
+    mw => mw.systemWallet.assetNetwork.network.code === targetNetwork
   )
   
   if (sameNetworkBalance) {
-    const available = parseFloat(sameNetworkBalance.balance.toString()) - 
+    const available = parseFloat(sameNetworkBalance.availableBalance.toString()) - 
                      parseFloat(sameNetworkBalance.lockedBalance.toString())
     
     if (available >= amount) {
@@ -68,11 +66,11 @@ function selectOptimalSources(
   }
 
   // Strategy 2: Use multiple networks if needed
-  const sortedBalances = currencyBalances
-    .map(cb => ({
-      network: cb.kmsWallet.network,
-      available: parseFloat(cb.balance.toString()) - parseFloat(cb.lockedBalance.toString()),
-      fee: NETWORK_FEES[cb.kmsWallet.network] || 1.0,
+  const sortedBalances = merchantWallets
+    .map(mw => ({
+      network: mw.systemWallet.assetNetwork.network.code,
+      available: parseFloat(mw.availableBalance.toString()) - parseFloat(mw.lockedBalance.toString()),
+      fee: NETWORK_FEES[mw.systemWallet.assetNetwork.network.code] || 1.0,
     }))
     .filter(b => b.available > 0)
     .sort((a, b) => a.fee - b.fee) // Sort by lowest fees first
@@ -291,14 +289,17 @@ export const merchantRouter = createTRPCRouter({
   // Get merchant wallets (returns KMS wallet balances)
   getWallets: merchantAuthenticatedProcedure.query(async ({ ctx }) => {
     // Return merchant balances from KMS wallet system
-    const merchantBalances = await ctx.prisma.merchantBalance.findMany({
+    const merchantBalances = await ctx.prisma.merchantWallet.findMany({
       where: { merchantId: ctx.merchant.id },
       include: {
-        wallet: {
+        systemWallet: {
           select: {
-            currency: true,
-            network: true,
-            contractAddress: true,
+            assetNetwork: {
+              select: {
+                asset: true,
+                network: true,
+              }
+            },
             signatureId: true,
           }
         }
@@ -309,17 +310,17 @@ export const merchantRouter = createTRPCRouter({
     return merchantBalances.map(mb => ({
       id: mb.id,
       merchantId: mb.merchantId,
-      currency: mb.wallet.currency,
-      network: mb.wallet.network,
-      contractAddress: mb.wallet.contractAddress,
-      balance: mb.balance.toString(),
+      currency: mb.systemWallet.assetNetwork.asset.symbol,
+      network: mb.systemWallet.assetNetwork.network.code,
+      contractAddress: mb.systemWallet.assetNetwork.contractAddress || null,
+      balance: mb.availableBalance.toString(),
       lockedBalance: mb.lockedBalance.toString(),
       totalReceived: mb.totalReceived.toString(),
       totalWithdrawn: mb.totalWithdrawn.toString(),
-      signatureId: mb.wallet.signatureId, // Add KMS signature ID for transaction signing
+      signatureId: mb.systemWallet.signatureId, // Add KMS signature ID for transaction signing
       isActive: true,
       createdAt: mb.createdAt,
-      updatedAt: mb.lastUpdated,
+      updatedAt: mb.updatedAt,
     }))
   }),
 
@@ -344,9 +345,9 @@ export const merchantRouter = createTRPCRouter({
         ctx.prisma.invoice.findMany({
           where,
           include: {
-            address: {
+            paymentAddress: {
               include: {
-                wallet: true,
+                systemWallet: true,
               },
             },
             transactions: true,
@@ -422,70 +423,72 @@ export const merchantRouter = createTRPCRouter({
   getBalances: userOwnsMerchantProcedure
     .input(merchantIdSchema)
     .query(async ({ ctx }) => {
-      // Get merchant balances with full currency information
-      const merchantBalances = await ctx.prisma.merchantBalance.findMany({
+      // Get merchant wallets with full asset information
+      const merchantWallets = await ctx.prisma.merchantWallet.findMany({
         where: { merchantId: ctx.merchant.id },
         include: {
-          wallet: {
+          systemWallet: {
             select: {
-              currency: true,
-              network: true,
-              contractAddress: true,
+              assetNetwork: {
+                include: {
+                  asset: true,
+                  network: true
+                }
+              }
             }
           }
         }
       })
 
-      // Get all active currencies to show complete list (including zero balances)
-      const allCurrencies = await ctx.prisma.currency.findMany({
+      // Get all active asset networks to show complete list (including zero balances)
+      const allAssetNetworks = await ctx.prisma.assetNetwork.findMany({
         where: { isActive: true },
         include: {
-          baseCurrency: true,
+          asset: true,
           network: true
         }
       })
 
       // Create balance map for existing balances
       const balanceMap = new Map()
-      merchantBalances.forEach(mb => {
-        const key = `${mb.wallet.currency}-${mb.wallet.network}`
-        balanceMap.set(key, mb)
+      merchantWallets.forEach(mw => {
+        const key = `${mw.systemWallet.assetNetwork.asset.symbol}-${mw.systemWallet.assetNetwork.network.code}`
+        balanceMap.set(key, mw)
       })
 
-      // Get prices for all currencies
+      // Get prices for all assets
       const { fetchPricesFromAPI } = await import('@/app/services/price-provider')
-      const currencyCodes = [...new Set(allCurrencies.map(c => c.baseCurrency.code))]
+      const assetSymbols = [...new Set(allAssetNetworks.map(an => an.asset.symbol))]
       let prices: Record<string, number> = {}
       
       try {
-        prices = await fetchPricesFromAPI(currencyCodes)
+        prices = await fetchPricesFromAPI(assetSymbols)
       } catch {
         // Use default empty prices if fetch fails
         prices = {}
       }
 
-      // Return complete currency list with balances (or zero balances)
-      return allCurrencies.map(currency => {
-        const key = `${currency.baseCurrency.code}-${currency.network.code}`
+      // Return complete asset network list with balances (or zero balances)
+      return allAssetNetworks.map(assetNetwork => {
+        const key = `${assetNetwork.asset.symbol}-${assetNetwork.network.code}`
         const existingBalance = balanceMap.get(key)
-        const balance = existingBalance ? Number(existingBalance.balance) : 0
-        const price = prices[currency.baseCurrency.code] || 0
+        const balance = existingBalance ? Number(existingBalance.availableBalance) : 0
+        const price = prices[assetNetwork.asset.symbol] || 0
         
         return {
-          id: existingBalance?.id || `${currency.id}-placeholder`,
-          currency: currency.baseCurrency.code,
-          network: currency.network.code,
+          currency: assetNetwork.asset.symbol,
+          network: assetNetwork.network.code,
           balance,
-          availableBalance: existingBalance ? balance - Number(existingBalance.lockedBalance) : 0,
+          availableBalance: existingBalance ? Number(existingBalance.availableBalance) : 0,
           lockedBalance: existingBalance ? Number(existingBalance.lockedBalance) : 0,
           totalReceived: existingBalance ? Number(existingBalance.totalReceived) : 0,
           totalWithdrawn: existingBalance ? Number(existingBalance.totalWithdrawn) : 0,
           price,
           value: balance * price,
-          imageUrl: currency.baseCurrency.imageUrl || null,
-          name: currency.baseCurrency.name,
-          contractAddress: currency.contractAddress,
-          lastUpdated: existingBalance?.lastUpdated.toISOString() || new Date().toISOString()
+          imageUrl: assetNetwork.asset.imageUrl || null,
+          name: assetNetwork.asset.name,
+          contractAddress: assetNetwork.contractAddress,
+          lastUpdated: existingBalance?.updatedAt.toISOString() || new Date().toISOString()
         }
       }).sort((a, b) => b.value - a.value)
     }),
@@ -615,7 +618,6 @@ export const merchantRouter = createTRPCRouter({
 
       if (input.search) {
         where.OR = [
-          { title: { contains: input.search, mode: 'insensitive' } },
           { description: { contains: input.search, mode: 'insensitive' } },
           { id: { contains: input.search, mode: 'insensitive' } },
         ]
@@ -629,9 +631,9 @@ export const merchantRouter = createTRPCRouter({
         ctx.prisma.invoice.findMany({
           where,
           include: {
-            address: {
+            paymentAddress: {
               include: {
-                wallet: true,
+                systemWallet: true,
               },
             },
             transactions: true,
@@ -654,168 +656,98 @@ export const merchantRouter = createTRPCRouter({
       }
     }),
 
-  // Generate KMS wallets for merchant
+  // Generate KMS wallets for merchant (Updated for new unified schema)
   generateKMSWallets: userOwnsMerchantProcedure
     .input(merchantIdSchema)
     .mutation(async ({ ctx }) => {
-      const { exec } = await import('child_process');
-      const { promisify } = await import('util');
-      const execAsync = promisify(exec);
-
-      // Import crypto assets configuration
-      const { CRYPTO_ASSETS } = await import('@/lib/crypto-assets-config');
-      
-      // Track unique chains to avoid duplicate wallet generation
-      const processedChains = new Set<string>();
-      const walletsToGenerate: Array<{
-        kmsChain: string;
-        currencySymbol: string;
-        networkName: string;
-      }> = [];
-      
-      // Collect all unique KMS chains from the configuration
-      for (const [symbol, asset] of Object.entries(CRYPTO_ASSETS)) {
-        for (const network of asset.networks) {
-          const chainKey = `${network.kmsChain}-${symbol}`;
-          
-          if (!processedChains.has(chainKey)) {
-            processedChains.add(chainKey);
-            walletsToGenerate.push({
-              kmsChain: network.kmsChain,
-              currencySymbol: symbol,
-              networkName: network.displayName || network.network,
-            });
-          }
+      // Get all active asset networks to create system wallets for
+      const assetNetworks = await ctx.prisma.assetNetwork.findMany({
+        where: { isActive: true },
+        include: {
+          asset: true,
+          network: true
         }
-      }
+      })
+
+      console.log(`Creating ${assetNetworks.length} merchant wallets for merchant ${ctx.merchant.id}...`);
       
-      console.log(`Generating ${walletsToGenerate.length} KMS wallets for merchant ${ctx.merchant.id}...`);
+      const createdWallets: Array<any> = [];
+      const failedWallets: Array<any> = [];
       
-      const generatedWallets: Array<{
-        signatureId: string;
-        xpub: string;
-        currency: string;
-        network: string;
-      }> = [];
-      
-      const failedWallets: Array<{
-        currency: string;
-        network: string;
-        error: string;
-      }> = [];
-      
-      // Generate wallets sequentially to avoid overwhelming KMS
-      for (const walletConfig of walletsToGenerate) {
+      // Create merchant wallets for each asset network
+      for (const assetNetwork of assetNetworks) {
         try {
-          console.log(`Generating ${walletConfig.currencySymbol} wallet for ${walletConfig.networkName}...`);
-          
-          const command = `docker run --rm --env-file .env.kms -v ./kms-data:/home/node/.tatumrc tatumio/tatum-kms generatemanagedwallet ${walletConfig.kmsChain}`;
-          
-          const { stdout, stderr } = await execAsync(command);
-          
-          if (stderr) {
-            console.error(`Error generating ${walletConfig.currencySymbol} wallet:`, stderr);
-            failedWallets.push({
-              currency: walletConfig.currencySymbol,
-              network: walletConfig.networkName,
-              error: stderr
-            });
-            continue;
+          // Check if system wallet already exists for this asset network
+          let systemWallet = await ctx.prisma.systemWallet.findFirst({
+            where: {
+              assetNetworkId: assetNetwork.id,
+              status: 'ACTIVE'
+            }
+          })
+
+          // If no system wallet exists, create one (this would normally be done by KMS setup)
+          if (!systemWallet) {
+            systemWallet = await ctx.prisma.systemWallet.create({
+              data: {
+                assetNetworkId: assetNetwork.id,
+                networkId: assetNetwork.networkId,
+                signatureId: `temp_${assetNetwork.asset.symbol}_${assetNetwork.network.code}`,
+                status: 'PENDING_SETUP'
+              }
+            })
           }
 
-          // Parse the JSON response from KMS
-          const response = JSON.parse(stdout.trim());
-          
-          if (response.signatureId && response.xpub) {
-            console.log(`Generated ${walletConfig.currencySymbol} wallet - Signature ID: ${response.signatureId}`);
+          // Check if merchant wallet already exists
+          const existingMerchantWallet = await ctx.prisma.merchantWallet.findFirst({
+            where: {
+              merchantId: ctx.merchant.id,
+              systemWalletId: systemWallet.id
+            }
+          })
+
+          if (!existingMerchantWallet) {
+            // Create merchant wallet
+            const merchantWallet = await ctx.prisma.merchantWallet.create({
+              data: {
+                merchantId: ctx.merchant.id,
+                systemWalletId: systemWallet.id,
+                availableBalance: 0,
+                pendingBalance: 0,
+                lockedBalance: 0,
+                totalReceived: 0,
+                totalWithdrawn: 0
+              }
+            })
             
-            generatedWallets.push({
-              signatureId: response.signatureId,
-              xpub: response.xpub,
-              currency: walletConfig.currencySymbol,
-              network: walletConfig.networkName,
-            });
+            createdWallets.push({
+              id: merchantWallet.id,
+              currency: assetNetwork.asset.symbol,
+              network: assetNetwork.network.code,
+              contractAddress: assetNetwork.contractAddress,
+              systemWalletId: systemWallet.id,
+              signatureId: systemWallet.signatureId
+            })
           } else {
-            console.error(`Invalid response for ${walletConfig.currencySymbol} wallet:`, response);
-            failedWallets.push({
-              currency: walletConfig.currencySymbol,
-              network: walletConfig.networkName,
-              error: 'Invalid KMS response'
-            });
+            console.log(`Merchant wallet already exists for ${assetNetwork.asset.symbol}/${assetNetwork.network.code}`)
           }
-          
-          // Small delay between generations
-          await new Promise(resolve => setTimeout(resolve, 1000));
           
         } catch (error) {
-          console.error(`Failed to generate ${walletConfig.currencySymbol} wallet:`, error);
+          console.error(`Failed to create merchant wallet for ${assetNetwork.asset.symbol}/${assetNetwork.network.code}:`, error);
           failedWallets.push({
-            currency: walletConfig.currencySymbol,
-            network: walletConfig.networkName,
+            currency: assetNetwork.asset.symbol,
+            network: assetNetwork.network.code,
             error: error instanceof Error ? error.message : 'Unknown error'
-          });
-        }
-      }
-      
-      // Save generated wallets to database and create merchant balances
-      const savedWallets: Array<any> = [];
-      
-      for (const wallet of generatedWallets) {
-        try {
-          // Create wallet record
-          const savedWallet = await ctx.prisma.wallet.create({
-            data: {
-              currency: wallet.currency,
-              network: wallet.network,
-              signatureId: wallet.signatureId,
-              xpub: wallet.xpub,
-              // derivationPath removed - KMS handles derivation internally
-              status: 'ACTIVE' as any,
-            }
-          });
-          
-          // Create merchant balance for this wallet
-          const merchantBalance = await ctx.prisma.merchantBalance.create({
-            data: {
-              merchantId: ctx.merchant.id,
-              walletId: savedWallet.id,
-              balance: 0,
-              lockedBalance: 0,
-              totalReceived: 0,
-              totalWithdrawn: 0
-            }
-          });
-          
-          savedWallets.push({
-            ...savedWallet,
-            merchantBalance: merchantBalance
-          });
-          
-          console.log(`Saved ${wallet.currency} wallet and created merchant balance`);
-          
-        } catch (dbError) {
-          console.error(`Failed to save ${wallet.currency} wallet to database:`, dbError);
-          failedWallets.push({
-            currency: wallet.currency,
-            network: wallet.network,
-            error: dbError instanceof Error ? dbError.message : 'Database save failed'
           });
         }
       }
       
       return {
         success: true,
-        walletsGenerated: savedWallets.length,
+        walletsGenerated: createdWallets.length,
         walletsFailed: failedWallets.length,
-        generatedWallets: savedWallets.map(w => ({
-          id: w.id,
-          currency: w.currency,
-          network: w.network,
-          signatureId: w.signatureId,
-          balanceId: w.merchantBalance.id
-        })),
+        generatedWallets: createdWallets,
         failedWallets,
-        message: `Successfully generated ${savedWallets.length} KMS wallets. ${failedWallets.length} failed.`
+        message: `Successfully created ${createdWallets.length} merchant wallets. ${failedWallets.length} failed.`
       };
     }),
 
@@ -835,33 +767,37 @@ export const merchantRouter = createTRPCRouter({
           }
         })
 
-        // 2. Delete KMS addresses (this will also handle invoices due to cascade)
-        await tx.address.deleteMany({
-          where: {
-            invoices: {
-              some: {
-                merchantId: ctx.merchant.id
-              }
-            }
-          }
+        // 2. Delete webhook deliveries
+        await tx.webhookDelivery.deleteMany({
+          where: { merchantId: ctx.merchant.id }
         })
 
-        // 3. Delete invoices
+        // 3. Delete invoices (will cascade to webhook notifications)
         await tx.invoice.deleteMany({
           where: { merchantId: ctx.merchant.id }
         })
 
-        // 4. Delete merchant balances
-        await tx.merchantBalance.deleteMany({
+        // 4. Delete payment addresses for this merchant
+        await tx.paymentAddress.deleteMany({
           where: { merchantId: ctx.merchant.id }
         })
 
-        // 5. Delete withdrawals
+        // 5. Delete merchant wallets
+        await tx.merchantWallet.deleteMany({
+          where: { merchantId: ctx.merchant.id }
+        })
+
+        // 6. Delete withdrawals
         await tx.withdrawal.deleteMany({
           where: { merchantId: ctx.merchant.id }
         })
 
-        // 6. Finally delete the merchant
+        // 7. Delete merchant settings
+        await tx.merchantSettings.deleteMany({
+          where: { merchantId: ctx.merchant.id }
+        })
+
+        // 8. Finally delete the merchant
         await tx.merchant.delete({
           where: { id: ctx.merchant.id }
         })

@@ -292,7 +292,6 @@ export class TatumVirtualAccountManager {
       tron: 'TRX',
       polygon: 'MATIC',
       arbitrum: 'ETH', // Arbitrum's native currency is ETH
-      base: 'ETH', // Base's native currency is ETH
       solana: 'SOL',
       sui: 'SUI',
       dogecoin: 'DOGE',
@@ -306,7 +305,6 @@ export class TatumVirtualAccountManager {
       'bsc-testnet': 'BNB',
       'polygon-amoy': 'MATIC',
       'arbitrum-sepolia': 'ETH',
-      'base-sepolia': 'ETH',
       'tron-testnet': 'TRX',
       'tron-shasta': 'TRX',
       'solana-devnet': 'SOL',
@@ -597,7 +595,6 @@ export class TatumVirtualAccountManager {
       tron: 'TRON',
       polygon: 'MATIC',
       arbitrum: 'ARBITRUM',
-      base: 'BASE',
       solana: 'SOL',
       sui: 'SUI',
       dogecoin: 'DOGE',
@@ -611,7 +608,6 @@ export class TatumVirtualAccountManager {
       'bsc-testnet': 'bsc-testnet',
       'polygon-amoy': 'polygon-amoy',
       'arbitrum-sepolia': 'arbitrum-sepolia',
-      'base-sepolia': 'base-sepolia',
       'tron-testnet': 'tron-testnet',
       'tron-shasta': 'tron-testnet',
       'solana-devnet': 'solana-devnet',

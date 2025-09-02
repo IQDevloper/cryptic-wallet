@@ -141,13 +141,12 @@ export async function generateAddress(
     )
 
     // Create address record in database
-    const address = await prisma.address.create({
+    const address = await prisma.paymentAddress.create({
       data: {
-        walletId: wallet.id,
+        systemWalletId: wallet.id,
         merchantId,
         address: addressData.address,
         derivationIndex: addressIndex,
-        signatureId: addressData.signatureId, // KMS signature ID for this specific address
         currentBalance: 0
       }
     })

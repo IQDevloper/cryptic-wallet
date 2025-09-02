@@ -11,8 +11,16 @@
     "db:push": "prisma db push",
     "db:migrate": "prisma migrate dev",
     "db:seed": "tsx prisma/seed.ts",
-    "generate-supported-wallets": "node scripts/generate-supported-kms-wallets.js",
-    "type-check": "tsc --noEmit"
+    "generate-wallets": "tsx scripts/generate-kms-wallets.ts",
+    "sync-currencies": "tsx scripts/sync-currencies-to-db.ts",
+    "type-check": "tsc --noEmit",
+    "kms:setup": "./scripts/setup-tatum-kms.sh",
+    "kms:generate-wallets": "tsx scripts/generate-real-kms-wallets.ts",
+    "kms:test": "tsx scripts/test-real-kms.ts",
+    "kms:start": "docker-compose -f docker-compose.kms.yml up -d",
+    "kms:stop": "docker-compose -f docker-compose.kms.yml down",
+    "kms:logs": "docker logs cryptic-tatum-kms",
+    "test:unified-wallets": "tsx scripts/test-unified-wallets.ts"
   },
   "dependencies": {
     "@bitcoinerlab/secp256k1": "^1.2.0",

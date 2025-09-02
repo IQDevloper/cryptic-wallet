@@ -7,21 +7,27 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// ============================================
+// AUTHENTICATION & USER MANAGEMENT
+// ============================================
+
 model User {
   id                     String        @id @default(cuid())
   email                  String        @unique
   name                   String
   password               String
   isActive               Boolean       @default(true)
+  emailVerified          Boolean       @default(false)
+  emailVerificationToken String?
+  passwordResetToken     String?
+  passwordResetExpires   DateTime?
+  lastLogin              DateTime?
+  role                   UserRole      @default(MERCHANT)
   createdAt              DateTime      @default(now())
   updatedAt              DateTime      @updatedAt
   deletedAt              DateTime?
-  emailVerificationToken String?
-  emailVerified          Boolean       @default(false)
-  lastLogin              DateTime?
-  passwordResetExpires   DateTime?
-  passwordResetToken     String?
-  role                   UserRole      @default(MERCHANT)
+  
+  // Relations
   auditLogs              AuditLog[]
   merchants              Merchant[]
   sessions               UserSession[]
@@ -33,31 +39,57 @@ model User {
   @@map("users")
 }
 
+model UserSession {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  expires      DateTime
+  ipAddress    String?
+  userAgent    String?
+  isActive     Boolean  @default(true)
+  lastUsed     DateTime 
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  userId       String?
+  
+  // Relations
+  user         User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([sessionToken])
+  @@index([userId])
+  @@index([expires])
+  @@index([isActive])
+  @@map("user_sessions")
+}
+
+// ============================================
+// MERCHANT MANAGEMENT
+// ============================================
+
 model Merchant {
   id                String            @id @default(cuid())
   name              String
+  businessName      String?
+  businessAddress   String?
+  taxId             String?
   apiKey            String            @unique
   apiKeyHash        String
-  webhookUrl        String?
-  isActive          Boolean           @default(true)
-  createdAt         DateTime          @default(now())
-  updatedAt         DateTime          @updatedAt
-  userId            String?
   apiKeyCreatedAt   DateTime          @default(now())
   apiKeyLastUsed    DateTime?
-  businessAddress   String?
-  businessName      String?
-  taxId             String?
+  webhookUrl        String?
+  isActive          Boolean           @default(true)
+  userId            String?
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
   deletedAt         DateTime?
-  // Removed unused fields: defaultCurrency, invoiceExpiry, isVerified, rateLimit, rateLimitWindow, webhookRetryCount, webhookSecret, webhookTimeout
+  
+  // Relations
+  user              User?             @relation(fields: [userId], references: [id])
   apiUsageStats     ApiUsageStats[]
   invoices          Invoice[]
   merchantSettings  MerchantSettings?
-  user              User?             @relation(fields: [userId], references: [id])
-  // wallets relation removed - using MerchantBalance with GlobalHDWallet system
   webhookDeliveries WebhookDelivery[]
-  merchantBalances  MerchantBalance[]
-  addresses         Address[]
+  merchantWallets   MerchantWallet[]  // Renamed from merchantBalances
+  paymentAddresses  PaymentAddress[]  // Direct relation for merchant's addresses
   withdrawals       Withdrawal[]
 
   @@index([isActive])
@@ -68,112 +100,272 @@ model Merchant {
   @@map("merchants")
 }
 
+model MerchantSettings {
+  id                   String   @id @default(cuid())
+  webhookNotifications Boolean  @default(true)
+  autoConfirmPayments  Boolean  @default(true)
+  minimumConfirmations Int      @default(6)
+  brandColor           String?
+  logoUrl              String?
+  companyName          String?
+  supportEmail         String?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  merchantId           String   @unique
+  
+  // Relations
+  merchant             Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+
+  @@map("merchant_settings")
+}
+
+// ============================================
+// UNIFIED WALLET & CURRENCY ARCHITECTURE
+// ============================================
+
+// Single definition for each cryptocurrency/token
+model Asset {
+  id              String         @id @default(cuid())
+  symbol          String         @unique  // "BTC", "ETH", "USDT", "USDC"
+  name            String                  // "Bitcoin", "Ethereum", "Tether USD"
+  type            AssetType               // NATIVE or TOKEN
+  logoUrl         String?
+  decimals        Int            @default(18) // Default decimals
+  coinGeckoId     String?
+  coinMarketCapId String?
+  isActive        Boolean        @default(true)
+  priority        Int            @default(0) // For display ordering
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  
+  // Relations
+  assetNetworks   AssetNetwork[]
+
+  @@index([symbol])
+  @@index([isActive])
+  @@index([priority])
+  @@map("assets")
+}
+
+// Blockchain networks
 model Network {
-  id                 String        @id @default(cuid())
-  code               String        @unique
-  name               String
-  tatumChainId       String        @unique
-  blockConfirmations Int           @default(6)
-  isTestnet          Boolean       @default(false)
-  isActive           Boolean       @default(true)
-  createdAt          DateTime      @default(now())
-  updatedAt          DateTime      @updatedAt
-  deletedAt          DateTime?
-  // Removed rarely used fields: averageBlockTime, explorerUrl, lastBlockChecked, lastStatusCheck, maxWithdrawAmount, minWithdrawAmount, networkStatus, rpcUrl, withdrawFee
-  currencies         Currency[]
+  id                 String         @id @default(cuid())
+  code               String         @unique  // "ethereum", "bsc", "polygon", "bitcoin", "tron"
+  name               String                   // "Ethereum Mainnet", "Binance Smart Chain"
+  chainId            Int?                     // Numeric chain ID for EVM chains
+  tatumChainId       String         @unique  // Tatum's chain identifier
+  type               NetworkType              // EVM, UTXO, TRON
+  isTestnet          Boolean        @default(false)
+  blockConfirmations Int            @default(6)
+  rpcUrl             String?
+  explorerUrl        String?
+  isActive           Boolean        @default(true)
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+  
+  // Relations
+  assetNetworks      AssetNetwork[]
+  systemWallets      SystemWallet[]
 
   @@index([code])
   @@index([isActive])
   @@index([isTestnet])
-  @@index([deletedAt])
   @@map("networks")
 }
 
-model BaseCurrency {
-  id              String         @id @default(cuid())
-  code            String         @unique // "USDT", "BTC", "ETH"
-  name            String         // "Tether USD", "Bitcoin", "Ethereum"
-  symbol          String         // "USDT", "BTC", "ETH"
-  imageUrl        String?
-  coinGeckoId     String?
-  coinMarketCapId String?
-  isActive        Boolean        @default(true)
-  createdAt       DateTime       @default(now())
-  updatedAt       DateTime       @updatedAt
-  deletedAt       DateTime?
-  priority        Int            @default(0)
-  currencies      Currency[]
+// Configuration for assets on specific networks
+model AssetNetwork {
+  id                String         @id @default(cuid())
+  assetId           String
+  networkId         String
+  contractAddress   String?        // NULL for native coins, address for tokens
+  decimals          Int            // Network-specific decimals
+  tokenStandard     String?        // "ERC-20", "BEP-20", "TRC-20"
+  minAmount         Decimal        @default(0) @db.Decimal(36, 18)
+  maxAmount         Decimal?       @db.Decimal(36, 18)
+  depositFee        Decimal        @default(0) @db.Decimal(36, 18)
+  withdrawalFee     Decimal        @default(0) @db.Decimal(36, 18)
+  isActive          Boolean        @default(true)
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+  
+  // Relations
+  asset             Asset          @relation(fields: [assetId], references: [id])
+  network           Network        @relation(fields: [networkId], references: [id])
+  systemWallets     SystemWallet[]
 
-  @@index([code])
-  @@index([symbol])
-  @@index([isActive])
-  @@index([priority])
-  @@index([deletedAt])
-  @@map("base_currencies")
-}
-
-model Currency {
-  id              String         @id @default(cuid())
-  baseCurrencyId  String
-  networkId       String
-  contractAddress String?        // Token contract address (null for native coins)
-  decimals        Int
-  isToken         Boolean        @default(false)
-  tokenStandard   String?        // "BEP-20", "TRC-20", "ERC-20"
-  isActive        Boolean        @default(true)
-  createdAt       DateTime       @default(now())
-  updatedAt       DateTime       @updatedAt
-  deletedAt       DateTime?
-  maxAmount       Decimal?       @db.Decimal(36, 18)
-  minAmount       Decimal        @default(0) @db.Decimal(36, 18)
-  withdrawFee     Decimal        @default(0) @db.Decimal(36, 18)
-  baseCurrency    BaseCurrency   @relation(fields: [baseCurrencyId], references: [id])
-  network         Network        @relation(fields: [networkId], references: [id])
-  // wallets relation removed - using GlobalHDWallet system instead
-
-  @@unique([baseCurrencyId, networkId]) // Same base currency can exist on multiple networks
-  @@index([baseCurrencyId])
+  @@unique([assetId, networkId])
+  @@index([assetId])
   @@index([networkId])
   @@index([contractAddress])
   @@index([isActive])
-  @@index([deletedAt])
-  @@map("currencies")
+  @@map("asset_networks")
 }
 
-// Wallet model removed - replaced with HD wallet architecture:
-// - GlobalHDWallet: Manages global wallets for all currencies/networks  
-// - MerchantBalance: Tracks individual merchant balances per global wallet
-// - DerivedAddress: Individual payment addresses derived from global wallets
-// See HD_WALLET_MIGRATION_TRACKER.md for complete migration details
+// System-wide KMS-managed wallets
+model SystemWallet {
+  id                 String            @id @default(cuid())
+  assetNetworkId     String
+  networkId          String            // Direct reference for easier queries
+  
+  // KMS Integration
+  signatureId        String            @unique  // KMS signature ID for wallet/mnemonic
+  walletType         WalletType        @default(MNEMONIC)
+  xpub               String?           // Extended public key from KMS
+  derivationPath     String            @default("m/44'/60'/0'/0") // HD derivation path
+  
+  // Address Management
+  nextAddressIndex   BigInt            @default(0)
+  totalBalance       Decimal           @default(0) @db.Decimal(36, 18)
+  
+  // Status
+  status             WalletStatus      @default(PENDING_SETUP)
+  metadata           Json?             // Additional KMS data, configuration
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+  
+  // Relations
+  assetNetwork       AssetNetwork      @relation(fields: [assetNetworkId], references: [id])
+  network            Network           @relation(fields: [networkId], references: [id])
+  merchantWallets    MerchantWallet[]
+  paymentAddresses   PaymentAddress[]
+
+  @@index([status])
+  @@index([assetNetworkId])
+  @@index([networkId])
+  @@index([signatureId])
+  @@map("system_wallets")
+}
+
+// Merchant-specific wallet balances and settings
+model MerchantWallet {
+  id                    String        @id @default(cuid())
+  merchantId            String
+  systemWalletId        String
+  
+  // Balances
+  availableBalance      Decimal       @default(0) @db.Decimal(36, 18)  // Confirmed balance
+  pendingBalance        Decimal       @default(0) @db.Decimal(36, 18)  // Unconfirmed
+  lockedBalance         Decimal       @default(0) @db.Decimal(36, 18)  // Reserved for withdrawals
+  
+  // Statistics
+  totalReceived         Decimal       @default(0) @db.Decimal(36, 18)
+  totalWithdrawn        Decimal       @default(0) @db.Decimal(36, 18)
+  
+  // Auto-withdrawal settings
+  autoWithdrawEnabled   Boolean       @default(false)
+  autoWithdrawAddress   String?
+  autoWithdrawThreshold Decimal?      @db.Decimal(36, 18)
+  
+  // Metadata
+  lastActivityAt        DateTime?
+  statistics            Json?         // Additional metrics
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
+  
+  // Relations
+  merchant              Merchant      @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  systemWallet          SystemWallet  @relation(fields: [systemWalletId], references: [id])
+  paymentAddresses      PaymentAddress[]
+
+  @@unique([merchantId, systemWalletId])
+  @@index([merchantId])
+  @@index([systemWalletId])
+  @@index([availableBalance])
+  @@map("merchant_wallets")
+}
+
+// Individual payment addresses
+model PaymentAddress {
+  id                   String         @id @default(cuid())
+  systemWalletId       String
+  merchantWalletId     String
+  merchantId           String         // Direct reference for easier queries
+  
+  // Address details
+  address              String         @unique
+  derivationIndex      BigInt
+  addressSignatureId   String?        @unique  // KMS signature ID if stored separately
+  
+  // Assignment
+  invoiceId            String?        @unique  // One address per invoice
+  balance              Decimal        @default(0) @db.Decimal(36, 18)
+  
+  // Tatum monitoring
+  tatumSubscriptionId  String?        @unique
+  subscriptionActive   Boolean        @default(false)
+  
+  // Activity tracking
+  firstSeenAt          DateTime?
+  lastSeenAt           DateTime?
+  metadata             Json?
+  createdAt            DateTime       @default(now())
+  
+  // Relations
+  systemWallet         SystemWallet   @relation(fields: [systemWalletId], references: [id])
+  merchantWallet       MerchantWallet @relation(fields: [merchantWalletId], references: [id])
+  merchant             Merchant       @relation(fields: [merchantId], references: [id])
+  invoice              Invoice?
+  webhookNotifications WebhookNotification[]
+
+  @@index([systemWalletId])
+  @@index([merchantWalletId])
+  @@index([merchantId])
+  @@index([derivationIndex])
+  @@index([invoiceId])
+  @@index([addressSignatureId])
+  @@index([tatumSubscriptionId])
+  @@index([subscriptionActive])
+  @@map("payment_addresses")
+}
+
+// ============================================
+// INVOICES & TRANSACTIONS
+// ============================================
 
 model Invoice {
   id                String            @id @default(cuid())
+  merchantId        String
+  paymentAddressId  String            @unique  // One-to-one with PaymentAddress
+  
+  // Payment details
   amount            Decimal           @db.Decimal(36, 18)
-  currency          String
-  depositAddress    String            @unique
-  description       String?
+  currency          String            // Asset symbol
+  network           String            // Network code
+  depositAddress    String            // Denormalized for quick access
+  
+  // Status
   status            InvoiceStatus     @default(PENDING)
+  amountPaid        Decimal           @default(0) @db.Decimal(36, 18)
+  
+  // Metadata
+  orderId           String?
+  description       String?
+  customData        Json?
+  memo              String?
+  
+  // URLs
+  notifyUrl         String?
+  redirectUrl       String?
+  returnUrl         String?
+  qrCodeData        String?
+  
+  // Exchange rates
+  fiatAmount        Decimal?          @db.Decimal(10, 2)
+  fiatCurrency      String?
+  exchangeRate      Decimal?          @db.Decimal(18, 8)
+  
+  // Timestamps
   paidAt            DateTime?
+  confirmedAt       DateTime?
   expiresAt         DateTime
   createdAt         DateTime          @default(now())
   updatedAt         DateTime          @updatedAt
-  merchantId        String
-  addressId         String            // Address - primary reference
-  amountPaid        Decimal           @default(0) @db.Decimal(36, 18)
-  confirmedAt       DateTime?
-  customData        Json?
   deletedAt         DateTime?
-  exchangeRate      Decimal?          @db.Decimal(18, 8)
-  fiatAmount        Decimal?          @db.Decimal(10, 2)
-  fiatCurrency      String?
-  memo              String?
-  notifyUrl         String?
-  orderId           String?
-  qrCodeData        String?
-  redirectUrl       String?
-  returnUrl         String?
+  
+  // Relations
   merchant          Merchant          @relation(fields: [merchantId], references: [id], onDelete: Cascade)
-  address           Address           @relation(fields: [addressId], references: [id])  // Primary relation
+  paymentAddress    PaymentAddress    @relation(fields: [paymentAddressId], references: [id])
   transactions      Transaction[]
   webhookDeliveries WebhookDelivery[]
   webhookNotifications WebhookNotification[]
@@ -191,24 +383,38 @@ model Invoice {
 
 model Transaction {
   id             String            @id @default(cuid())
+  invoiceId      String
+  
+  // Transaction details
   txHash         String            @unique
   amount         Decimal           @db.Decimal(36, 18)
-  blockNumber    BigInt?
-  confirmations  Int               @default(0)
-  status         TransactionStatus @default(PENDING)
-  tatumWebhookId String?           @unique
-  createdAt      DateTime          @default(now())
-  updatedAt      DateTime          @updatedAt
-  invoiceId      String
-  blockHash      String?
-  deletedAt      DateTime?
-  failureReason  String?
   fromAddress    String?
+  toAddress      String?
+  
+  // Block information
+  blockNumber    BigInt?
+  blockHash      String?
+  confirmations  Int               @default(0)
+  
+  // Status
+  status         TransactionStatus @default(PENDING)
+  failureReason  String?
+  
+  // Gas/Fees
   gasPrice       BigInt?
   gasUsed        BigInt?
-  processedAt    DateTime?
-  toAddress      String?
   transactionFee Decimal?          @db.Decimal(36, 18)
+  
+  // Tatum
+  tatumWebhookId String?           @unique
+  
+  // Timestamps
+  processedAt    DateTime?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+  deletedAt      DateTime?
+  
+  // Relations
   invoice        Invoice           @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
 
   @@index([txHash])
@@ -221,33 +427,71 @@ model Transaction {
   @@map("transactions")
 }
 
-// AddressPool model removed - replaced with HD wallet architecture:
-// - GlobalHDWallet: Manages global wallets for all currencies/networks
-// - DerivedAddress: Individual payment addresses derived from global wallets
-// - MerchantBalance: Tracks individual merchant balances
-// Pre-generated address pools are no longer needed with HD wallet derivation
+// ============================================
+// WEBHOOKS & NOTIFICATIONS
+// ============================================
+
+model WebhookNotification {
+  id                String        @id @default(cuid())
+  paymentAddressId  String
+  invoiceId         String?
+  
+  // Transaction details
+  txHash            String        @unique
+  amount            Decimal       @db.Decimal(36, 18)
+  blockNumber       BigInt?
+  confirmations     Int           @default(0)
+  chain             String
+  
+  // Status
+  status            String        @default("PENDING")
+  webhookPayload    Json
+  processedAt       DateTime?
+  createdAt         DateTime      @default(now())
+  
+  // Relations
+  paymentAddress    PaymentAddress @relation(fields: [paymentAddressId], references: [id], onDelete: Cascade)
+  invoice           Invoice?       @relation(fields: [invoiceId], references: [id])
+
+  @@index([paymentAddressId])
+  @@index([invoiceId])
+  @@index([txHash])
+  @@index([status])
+  @@index([createdAt])
+  @@map("webhook_notifications")
+}
 
 model WebhookDelivery {
   id             String           @id @default(cuid())
+  merchantId     String
+  invoiceId      String?
+  
+  // Delivery details
   url            String
   eventType      WebhookEventType
   status         WebhookStatus    @default(PENDING)
+  
+  // Payload & Response
   payload        Json
   headers        Json?
   response       Json?
   httpStatus     Int?
+  errorMessage   String?
+  
+  // Retry logic
   attemptCount   Int              @default(0)
   maxAttempts    Int              @default(3)
   nextRetryAt    DateTime?
+  timeoutSeconds Int              @default(30)
+  
+  // Timestamps
   sentAt         DateTime?
   acknowledgedAt DateTime?
-  errorMessage   String?
-  timeoutSeconds Int              @default(30)
   createdAt      DateTime         @default(now())
   updatedAt      DateTime         @updatedAt
   deletedAt      DateTime?
-  merchantId     String
-  invoiceId      String?
+  
+  // Relations
   invoice        Invoice?         @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
   merchant       Merchant         @relation(fields: [merchantId], references: [id], onDelete: Cascade)
 
@@ -261,39 +505,75 @@ model WebhookDelivery {
   @@map("webhook_deliveries")
 }
 
-model MerchantSettings {
-  id                   String   @id @default(cuid())
-  webhookNotifications Boolean  @default(true)
-  autoConfirmPayments  Boolean  @default(true)
-  minimumConfirmations Int      @default(6)
-  brandColor           String?
-  logoUrl              String?
-  companyName          String?
-  supportEmail         String?
-  createdAt            DateTime @default(now())
-  updatedAt            DateTime @updatedAt
-  merchantId           String   @unique
-  merchant             Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
-  // Removed unused fields: emailNotifications, smsNotifications, defaultInvoiceExpiry, allowPartialPayments, ipWhitelist, requireSignature, allowTestMode, businessType, businessCountry, taxRate
+// ============================================
+// WITHDRAWALS
+// ============================================
 
-  @@map("merchant_settings")
+model Withdrawal {
+  id                String           @id @default(cuid())
+  merchantId        String
+  
+  // Withdrawal details
+  asset             String           // Asset symbol
+  totalAmount       Decimal          @db.Decimal(36, 18)
+  targetNetwork     String           // Target network code
+  targetAddress     String           // Destination address
+  
+  // Processing
+  status            WithdrawalStatus @default(PENDING)
+  withdrawalSources Json             // Array of {networkId, amount, systemWalletId}
+  totalFees         Decimal          @db.Decimal(36, 18)
+  needsBridging     Boolean          @default(false)
+  
+  // Results
+  transactions      Json?            // Array of tx hashes
+  failedReason      String?
+  
+  // Timestamps
+  completedAt       DateTime?
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+  
+  // Relations
+  merchant          Merchant         @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+
+  @@index([merchantId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("withdrawals")
 }
+
+// ============================================
+// MONITORING & ANALYTICS
+// ============================================
 
 model ApiUsageStats {
   id           String   @id @default(cuid())
+  merchantId   String
+  
+  // Request details
   endpoint     String
   method       String
-  requestCount Int      @default(1)
+  statusCode   Int?
   responseTime Int?
+  
+  // Metrics
+  requestCount Int      @default(1)
   errorCount   Int      @default(0)
+  
+  // Grouping
   hourlyBucket DateTime
   dailyBucket  DateTime
+  
+  // Context
   userAgent    String?
   ipAddress    String?
-  statusCode   Int?
+  
+  // Timestamps
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
-  merchantId   String
+  
+  // Relations
   merchant     Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
 
   @@unique([merchantId, endpoint, method, hourlyBucket])
@@ -304,40 +584,30 @@ model ApiUsageStats {
   @@map("api_usage_stats")
 }
 
-model UserSession {
-  id           String   @id @default(cuid())
-  sessionToken String   @unique
-  expires      DateTime
-  ipAddress    String?
-  userAgent    String?
-  isActive     Boolean  @default(true)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-  lastUsed     DateTime 
-  userId       String?
-  user         User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
-
-  @@index([sessionToken])
-  @@index([userId])
-  @@index([expires])
-  @@index([isActive])
-  @@map("user_sessions")
-}
-
 model AuditLog {
   id         String   @id @default(cuid())
+  userId     String?
+  
+  // Action details
   action     String
   tableName  String?
   recordId   String?
+  
+  // Changes
   oldValues  Json?
   newValues  Json?
+  
+  // Context
   ipAddress  String?
   userAgent  String?
   endpoint   String?
   method     String?
   statusCode Int?
+  
+  // Timestamp
   createdAt  DateTime @default(now())
-  userId     String?
+  
+  // Relations
   user       User?    @relation(fields: [userId], references: [id])
 
   @@index([userId])
@@ -348,11 +618,39 @@ model AuditLog {
   @@map("audit_logs")
 }
 
-// BalanceHistory model removed - was only used by deprecated TatumPaymentService
-// Balance history is now tracked through MerchantBalance updates in the HD wallet system
+// ============================================
+// ENUMS
+// ============================================
 
-// PriceHistory model removed - was intended for tracking cryptocurrency prices over time
-// but was never implemented. Price data can be fetched from external APIs when needed
+enum UserRole {
+  ADMIN
+  MERCHANT
+  OPERATOR
+}
+
+enum AssetType {
+  NATIVE
+  TOKEN
+}
+
+enum NetworkType {
+  EVM
+  UTXO
+  TRON
+  SOLANA
+}
+
+enum WalletType {
+  MNEMONIC      // HD wallet from mnemonic
+  PRIVATE_KEY   // Single private key
+}
+
+enum WalletStatus {
+  ACTIVE
+  INACTIVE
+  MAINTENANCE
+  PENDING_SETUP
+}
 
 enum InvoiceStatus {
   PENDING
@@ -372,6 +670,14 @@ enum TransactionStatus {
   REPLACED
 }
 
+enum WithdrawalStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
 enum WebhookStatus {
   PENDING
   SENT
@@ -386,183 +692,4 @@ enum WebhookEventType {
   INVOICE_CANCELLED
   TRANSACTION_CONFIRMED
   TRANSACTION_FAILED
-}
-
-// AddressStatus enum removed - was only used by the obsolete AddressPool model
-// HD wallet system uses DerivedAddress with simpler tracking via assignedToInvoice field
-
-enum NotificationType {
-  EMAIL
-  WEBHOOK
-  SMS
-}
-
-enum UserRole {
-  ADMIN
-  MERCHANT
-  OPERATOR
-}
-
-enum WalletStatus {
-  ACTIVE
-  INACTIVE
-  MAINTENANCE
-  PENDING_SETUP
-}
-
-enum WalletType {
-  MNEMONIC      // Wallet generated from mnemonic (can derive addresses)
-  PRIVATE_KEY   // Single private key wallet
-}
-
-// Tatum KMS wallet system - replaces GlobalHDWallet
-model Wallet {
-  id                 String            @id @default(cuid())
-  currency           String            // "BTC", "ETH", "USDT"
-  network            String            // "bitcoin", "ethereum", "bsc", "tron"
-  contractAddress    String?           // NULL for native, contract address for tokens
-  
-  // Tatum KMS specific fields
-  signatureId        String            @unique // KMS signature ID for wallet/mnemonic
-  walletType         WalletType        @default(MNEMONIC)
-  xpub               String?           // Extended public key (if available from KMS)
-  
-  // Address management
-  nextAddressIndex   BigInt            @default(0) // Counter for address derivation
-  totalPoolBalance   Decimal           @default(0) @db.Decimal(36, 18) // Total balance
-  
-  status             WalletStatus      @default(PENDING_SETUP)
-  createdAt          DateTime          @default(now())
-  updatedAt          DateTime          @updatedAt
-
-  // Relations
-  merchantBalances   MerchantBalance[]
-  addresses          Address[]
-
-  @@unique([currency, network, contractAddress])
-  @@index([status])
-  @@index([currency])
-  @@index([network])
-  @@index([signatureId])
-  @@map("wallets")
-}
-
-model MerchantBalance {
-  id             String        @id @default(cuid())
-  merchantId     String
-  walletId       String        // References Wallet
-  balance        Decimal       @default(0) @db.Decimal(36, 18)       // Available balance
-  lockedBalance  Decimal       @default(0) @db.Decimal(36, 18)       // Locked for pending withdrawals
-  totalReceived  Decimal       @default(0) @db.Decimal(36, 18)       // Lifetime received
-  totalWithdrawn Decimal       @default(0) @db.Decimal(36, 18)       // Lifetime withdrawn
-  lastUpdated    DateTime      @default(now())
-  createdAt      DateTime      @default(now())
-
-  // Relations
-  merchant       Merchant      @relation(fields: [merchantId], references: [id], onDelete: Cascade)
-  wallet         Wallet        @relation(fields: [walletId], references: [id], onDelete: Cascade)
-
-  @@unique([merchantId, walletId])
-  @@index([merchantId])
-  @@index([walletId])
-  @@index([balance])
-  @@map("merchant_balances")
-}
-
-// Address system for KMS wallets - replaces DerivedAddress
-model Address {
-  id                String         @id @default(cuid())
-  walletId          String         // References Wallet
-  merchantId        String
-  address           String         @unique
-  derivationIndex   BigInt         // Address derivation index
-  
-  // KMS signature ID for this specific address private key (if stored separately)
-  signatureId       String?        @unique
-  
-  currentBalance    Decimal        @default(0) @db.Decimal(36, 18)
-  assignedToInvoice String?        // NULL if not assigned, invoice ID if assigned
-  firstUsedAt       DateTime?
-  lastActivityAt    DateTime?
-  createdAt         DateTime       @default(now())
-
-  // Tatum notification tracking
-  tatumSubscriptionId String?      // Tatum notification subscription ID
-  subscriptionActive  Boolean      @default(false) // Whether monitoring is active
-  lastNotificationAt  DateTime?    // Last webhook notification received
-
-  // Relations
-  wallet            Wallet         @relation(fields: [walletId], references: [id], onDelete: Cascade)
-  merchant          Merchant       @relation(fields: [merchantId], references: [id], onDelete: Cascade)
-  invoices          Invoice[]
-  webhookNotifications WebhookNotification[]
-
-  @@index([walletId])
-  @@index([merchantId])
-  @@index([derivationIndex])
-  @@index([assignedToInvoice])
-  @@index([signatureId])
-  @@index([tatumSubscriptionId])
-  @@index([subscriptionActive])
-  @@map("addresses")
-}
-
-model WebhookNotification {
-  id                String        @id @default(cuid())
-  addressId         String        // References Address
-  invoiceId         String?       // Associated invoice if applicable
-  txHash            String        @unique // Transaction hash from webhook
-  amount            Decimal       @db.Decimal(36, 18)
-  blockNumber       BigInt?
-  confirmations     Int           @default(0)
-  chain             String        // ETH, BTC, etc.
-  status            String        @default("PENDING") // PENDING, CONFIRMED, FAILED
-  webhookPayload    Json          // Raw webhook data for debugging
-  processedAt       DateTime?     // When we processed this webhook
-  createdAt         DateTime      @default(now())
-  
-  // Relations
-  address           Address       @relation(fields: [addressId], references: [id], onDelete: Cascade)
-  invoice           Invoice?      @relation(fields: [invoiceId], references: [id])
-
-  @@index([addressId])
-  @@index([invoiceId])
-  @@index([txHash])
-  @@index([status])
-  @@index([createdAt])
-  @@map("webhook_notifications")
-}
-
-model Withdrawal {
-  id                String   @id @default(cuid())
-  merchantId        String
-  currency          String   // "USDT", "BTC", "ETH"
-  totalAmount       Decimal  @db.Decimal(36, 18)
-  targetNetwork     String   // Target network for withdrawal
-  targetAddress     String   // User's wallet address
-  status            WithdrawalStatus @default(PENDING)
-  withdrawalSources Json     // Array of {network: string, amount: number}
-  totalFees         Decimal  @db.Decimal(36, 18)
-  needsBridging     Boolean  @default(false)
-  transactions      Json?    // Array of blockchain transaction hashes
-  completedAt       DateTime?
-  failedReason      String?
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
-
-  // Relations
-  merchant          Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
-
-  @@index([merchantId])
-  @@index([status])
-  @@index([createdAt])
-  @@map("withdrawals")
-}
-
-enum WithdrawalStatus {
-  PENDING
-  PROCESSING
-  COMPLETED
-  FAILED
-  CANCELLED
 }

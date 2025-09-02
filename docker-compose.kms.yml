@@ -1,35 +1,46 @@
+version: '3.8'
+
 services:
   tatum-kms:
     image: tatumio/tatum-kms:latest
-    container_name: cryptic-kms
+    container_name: cryptic-tatum-kms
     restart: unless-stopped
-    
-    # Environment configuration
-    env_file:
-      - .env.kms
-    
-    # Data persistence - use dedicated kms-data directory  
     volumes:
-      - ./kms-data:/home/node/.tatumrc
-      - ./kms-logs:/var/log/tatum-kms
-    
-    # Run KMS in daemon mode (API key read from env file)
-    command: ["daemon"]
-    
-    # Health check
+      - ./kms:/kms
+    environment:
+      - KMS_PASSWORD=${TATUM_KMS_PASSWORD:-secure-password-change-in-production}
+    ports:
+      - "3001:3001"  # Optional: if KMS has HTTP interface
+    command: daemon --pwd="${TATUM_KMS_PASSWORD:-secure-password-change-in-production}"
     healthcheck:
-      test: ["CMD", "pgrep", "-f", "tatum-kms"]
+      test: ["CMD-SHELL", "ps aux | grep -v grep | grep daemon || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
-    
-    # Logging configuration
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "100m"
-        max-file: "5"
+      start_period: 10s
+    networks:
+      - kms-network
+
+  # Optional: KMS Management Interface (if available)
+  kms-manager:
+    image: tatumio/tatum-kms:latest
+    container_name: cryptic-kms-manager
+    depends_on:
+      - tatum-kms
+    volumes:
+      - ./kms:/kms
+    environment:
+      - KMS_PASSWORD=${TATUM_KMS_PASSWORD:-secure-password-change-in-production}
+    profiles:
+      - management
+    networks:
+      - kms-network
+    command: getmanagedwallets --pwd="${TATUM_KMS_PASSWORD:-secure-password-change-in-production}"
 
 networks:
-  default:
-    name: cryptic-network
+  kms-network:
+    driver: bridge
+
+volumes:
+  kms-data:
+    driver: local
