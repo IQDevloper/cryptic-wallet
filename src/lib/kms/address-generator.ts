@@ -37,7 +37,7 @@ export async function generateAddressFast(
 ): Promise<AddressResult> {
   try {
     // Get the KMS wallet
-    const wallet = await prisma.wallet.findUnique({
+    const wallet = await prisma.systemWallet.findUnique({
       where: { 
         id: walletId,
         status: 'ACTIVE'
@@ -49,7 +49,7 @@ export async function generateAddressFast(
     }
 
     // Get the next address index and increment it atomically
-    const updatedWallet = await prisma.wallet.update({
+    const updatedWallet = await prisma.systemWallet.update({
       where: { id: walletId },
       data: {
         nextAddressIndex: {
@@ -63,20 +63,19 @@ export async function generateAddressFast(
     // Generate address using fast ethers derivation instead of Docker
     const addressData = await generateAddressFastEthers(
       wallet.signatureId,
-      wallet.currency,
-      wallet.network,
+      wallet.assetNetworkId,
+      wallet.networkId,
       addressIndex
     )
 
     // Create address record in database
-    const address = await prisma.address.create({
+    const address = await prisma.paymentAddress.create({
       data: {
-        walletId: wallet.id,
+        systemWalletId: wallet.id,
         merchantId,
         address: addressData.address,
         derivationIndex: addressIndex,
-        signatureId: addressData.signatureId, // Signature ID for this specific address
-        currentBalance: 0
+        balance: 0
       }
     })
 
@@ -104,11 +103,10 @@ export async function generateAddressFast(
 export async function generateAddress(
   walletId: string, 
   merchantId: string,
-  currency?: string
 ): Promise<AddressResult> {
   try {
     // Get the KMS wallet
-    const wallet = await prisma.wallet.findUnique({
+    const wallet = await prisma.systemWallet.findUnique({
       where: { 
         id: walletId,
         status: 'ACTIVE'
@@ -120,7 +118,7 @@ export async function generateAddress(
     }
 
     // Get the next address index and increment it atomically
-    const updatedWallet = await prisma.wallet.update({
+    const updatedWallet = await prisma.systemWallet.update({
       where: { id: walletId },
       data: {
         nextAddressIndex: {
@@ -134,8 +132,8 @@ export async function generateAddress(
     // Generate KMS address using Tatum KMS
     const addressData = await generateKMSAddress(
       wallet.signatureId,
-      wallet.currency,
-      wallet.network,
+      wallet.assetNetworkId,
+      wallet.networkId,
       addressIndex,
       wallet.contractAddress
     )
@@ -147,7 +145,7 @@ export async function generateAddress(
         merchantId,
         address: addressData.address,
         derivationIndex: addressIndex,
-        currentBalance: 0
+        balance: 0
       }
     })
 
@@ -257,10 +255,10 @@ async function generateKMSAddress(
  * Get address by deposit address (for webhook processing)
  */
 export async function getAddressByDeposit(depositAddress: string) {
-  return await prisma.address.findUnique({
+  return await prisma.paymentAddress.findUnique({
     where: { address: depositAddress.toLowerCase() },
     include: {
-      wallet: true,
+      systemWallet: true,
       merchant: true
     }
   })
@@ -270,9 +268,9 @@ export async function getAddressByDeposit(depositAddress: string) {
  * Mark address as assigned to an invoice
  */
 export async function assignAddressToInvoice(addressId: string, invoiceId: string) {
-  return await prisma.address.update({
+  return await prisma.paymentAddress.update({
     where: { id: addressId },
-    data: { assignedToInvoice: invoiceId }
+    data: { invoiceId }
   })
 }
 
@@ -280,11 +278,10 @@ export async function assignAddressToInvoice(addressId: string, invoiceId: strin
  * Update address balance (called from webhook handler)
  */
 export async function updateAddressBalance(addressId: string, newBalance: number) {
-  return await prisma.address.update({
+  return await prisma.paymentAddress.update({
     where: { id: addressId },
     data: { 
-      currentBalance: newBalance,
-      lastActivityAt: new Date()
+      balance: newBalance,
     }
   })
 }

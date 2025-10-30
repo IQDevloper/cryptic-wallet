@@ -11,6 +11,8 @@
     "db:push": "prisma db push",
     "db:migrate": "prisma migrate dev",
     "db:seed": "tsx prisma/seed.ts",
+    "db:seed:networks": "tsx prisma/seed.networks.ts",
+    "db:seed:clean": "tsx prisma/seed.networks.ts --cleanup",
     "generate-wallets": "tsx scripts/generate-kms-wallets.ts",
     "sync-currencies": "tsx scripts/sync-currencies-to-db.ts",
     "type-check": "tsc --noEmit",
@@ -25,7 +27,7 @@
   "dependencies": {
     "@bitcoinerlab/secp256k1": "^1.2.0",
     "@hookform/resolvers": "^3.9.0",
-    "@prisma/client": "^5.22.0",
+    "@prisma/client": "^6.15.0",
     "@radix-ui/react-alert-dialog": "^1.1.15",
     "@radix-ui/react-dialog": "^1.1.15",
     "@radix-ui/react-dropdown-menu": "^2.1.16",

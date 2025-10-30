@@ -427,14 +427,10 @@ export const merchantRouter = createTRPCRouter({
       const merchantWallets = await ctx.prisma.merchantWallet.findMany({
         where: { merchantId: ctx.merchant.id },
         include: {
-          systemWallet: {
-            select: {
-              assetNetwork: {
-                include: {
-                  asset: true,
-                  network: true
-                }
-              }
+          assetNetwork: {
+            include: {
+              asset: true,
+              network: true
             }
           }
         }
@@ -452,7 +448,7 @@ export const merchantRouter = createTRPCRouter({
       // Create balance map for existing balances
       const balanceMap = new Map()
       merchantWallets.forEach(mw => {
-        const key = `${mw.systemWallet.assetNetwork.asset.symbol}-${mw.systemWallet.assetNetwork.network.code}`
+        const key = `${mw.assetNetwork.asset.symbol}-${mw.assetNetwork.network.code}`
         balanceMap.set(key, mw)
       })
 
@@ -474,18 +470,17 @@ export const merchantRouter = createTRPCRouter({
         const existingBalance = balanceMap.get(key)
         const balance = existingBalance ? Number(existingBalance.availableBalance) : 0
         const price = prices[assetNetwork.asset.symbol] || 0
-        
+
         return {
           currency: assetNetwork.asset.symbol,
           network: assetNetwork.network.code,
           balance,
           availableBalance: existingBalance ? Number(existingBalance.availableBalance) : 0,
+          pendingBalance: existingBalance ? Number(existingBalance.pendingBalance) : 0,
           lockedBalance: existingBalance ? Number(existingBalance.lockedBalance) : 0,
-          totalReceived: existingBalance ? Number(existingBalance.totalReceived) : 0,
-          totalWithdrawn: existingBalance ? Number(existingBalance.totalWithdrawn) : 0,
           price,
           value: balance * price,
-          imageUrl: assetNetwork.asset.imageUrl || null,
+          imageUrl: assetNetwork.asset.logoUrl || null,
           name: assetNetwork.asset.name,
           contractAddress: assetNetwork.contractAddress,
           lastUpdated: existingBalance?.updatedAt.toISOString() || new Date().toISOString()

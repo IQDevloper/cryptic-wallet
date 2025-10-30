@@ -12,10 +12,14 @@ const publicRoutes = ['/', '/api/trpc'];
 
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
-  
+
+  console.log('[Middleware] Processing:', pathname);
+
   // Get user from request
   const user = getUserFromRequest(request);
   const isAuthenticated = !!user;
+
+  console.log('[Middleware] User:', user ? 'Authenticated' : 'Not authenticated');
 
   // Check if the current route is protected
   const isProtectedRoute = protectedRoutes.some(route => 
@@ -53,14 +57,8 @@ export function middleware(request: NextRequest) {
 
 export const config = {
   matcher: [
-    /*
-     * Match all request paths except for the ones starting with:
-     * - api (API routes)
-     * - _next/static (static files)
-     * - _next/image (image optimization files)
-     * - favicon.ico (favicon file)
-     * - public folder
-     */
-    '/((?!api|_next/static|_next/image|favicon.ico|.*\\.).*)',
+    '/dashboard/:path*',
+    '/login',
+    '/register',
   ],
 };

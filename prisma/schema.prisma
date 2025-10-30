@@ -120,202 +120,141 @@ model MerchantSettings {
 }
 
 // ============================================
-// UNIFIED WALLET & CURRENCY ARCHITECTURE
+// UNIFIED WALLET & CURRENCY ARCHITECTURE (REVISED FOR KMS)
 // ============================================
 
-// Single definition for each cryptocurrency/token
 model Asset {
-  id              String         @id @default(cuid())
-  symbol          String         @unique  // "BTC", "ETH", "USDT", "USDC"
-  name            String                  // "Bitcoin", "Ethereum", "Tether USD"
-  type            AssetType               // NATIVE or TOKEN
-  logoUrl         String?
-  decimals        Int            @default(18) // Default decimals
-  coinGeckoId     String?
-  coinMarketCapId String?
-  isActive        Boolean        @default(true)
-  priority        Int            @default(0) // For display ordering
-  createdAt       DateTime       @default(now())
-  updatedAt       DateTime       @updatedAt
-  
-  // Relations
-  assetNetworks   AssetNetwork[]
+  id        String    @id @default(cuid())
+  symbol    String    @unique
+  name      String
+  type      AssetType
+  logoUrl   String?
+  isActive  Boolean   @default(true)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  assetOnNetworks AssetNetwork[]
 
   @@index([symbol])
-  @@index([isActive])
-  @@index([priority])
   @@map("assets")
 }
 
-// Blockchain networks
 model Network {
-  id                 String         @id @default(cuid())
-  code               String         @unique  // "ethereum", "bsc", "polygon", "bitcoin", "tron"
-  name               String                   // "Ethereum Mainnet", "Binance Smart Chain"
-  chainId            Int?                     // Numeric chain ID for EVM chains
-  tatumChainId       String         @unique  // Tatum's chain identifier
-  type               NetworkType              // EVM, UTXO, TRON
-  isTestnet          Boolean        @default(false)
-  blockConfirmations Int            @default(6)
-  rpcUrl             String?
+  id                 String       @id @default(cuid())
+  code               String       @unique          // "ethereum", "bsc", "tron", ...
+  name               String
+  type               NetworkType  // EVM | UTXO | TRON | SOLANA
+  tatumChainId       String       @unique          // e.g. "ETHEREUM", "BINANCE_SMART_CHAIN"
+  isTestnet          Boolean      @default(false)
   explorerUrl        String?
-  isActive           Boolean        @default(true)
-  createdAt          DateTime       @default(now())
-  updatedAt          DateTime       @updatedAt
-  
-  // Relations
-  assetNetworks      AssetNetwork[]
-  systemWallets      SystemWallet[]
+  blockConfirmations Int          @default(6)
+  isActive           Boolean      @default(true)
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+
+  assetsOnNetwork    AssetNetwork[]
+  kmsWallets         KmsWallet[]                 // <-- allow many per network
 
   @@index([code])
   @@index([isActive])
-  @@index([isTestnet])
   @@map("networks")
 }
 
-// Configuration for assets on specific networks
+// KMS metadata & pools. Multiple wallets per network (sharding/rotation, deposit vs withdrawal)
+model KmsWallet {
+  id               String        @id @default(cuid())
+  networkId        String
+  signatureId      String                         // from KMS; unique per network
+  xpub             String?
+  derivationPath   String        @default("m/44'/60'/0'/0")
+  purpose          WalletPurpose @default(DEPOSIT) // DEPOSIT | WITHDRAWAL | BOTH
+  label            String?
+  nextAddressIndex BigInt        @default(0)
+  status           WalletStatus  @default(PENDING_SETUP)
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  network          Network       @relation(fields: [networkId], references: [id])
+  paymentAddresses PaymentAddress[]
+
+  @@unique([networkId, signatureId])            // reuse same signatureId across assets on same network
+  @@index([networkId, status])
+  @@map("kms_wallets")
+}
+
+// One row per asset on a specific network (native => contractAddress NULL)
 model AssetNetwork {
-  id                String         @id @default(cuid())
-  assetId           String
-  networkId         String
-  contractAddress   String?        // NULL for native coins, address for tokens
-  decimals          Int            // Network-specific decimals
-  tokenStandard     String?        // "ERC-20", "BEP-20", "TRC-20"
-  minAmount         Decimal        @default(0) @db.Decimal(36, 18)
-  maxAmount         Decimal?       @db.Decimal(36, 18)
-  depositFee        Decimal        @default(0) @db.Decimal(36, 18)
-  withdrawalFee     Decimal        @default(0) @db.Decimal(36, 18)
-  isActive          Boolean        @default(true)
-  createdAt         DateTime       @default(now())
-  updatedAt         DateTime       @updatedAt
-  
-  // Relations
-  asset             Asset          @relation(fields: [assetId], references: [id])
-  network           Network        @relation(fields: [networkId], references: [id])
-  systemWallets     SystemWallet[]
+  id              String   @id @default(cuid())
+  assetId         String
+  networkId       String
+  contractAddress String?          // NULL for native
+  tokenStandard   String?          // "ERC-20" | "BEP-20" | "TRC-20" | null
+  decimals        Int
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  asset           Asset    @relation(fields: [assetId], references: [id])
+  network         Network  @relation(fields: [networkId], references: [id])
+
+  merchantWallets MerchantWallet[]
+  paymentAddresses PaymentAddress[]            // <-- keep asset context at the address
 
   @@unique([assetId, networkId])
-  @@index([assetId])
-  @@index([networkId])
-  @@index([contractAddress])
-  @@index([isActive])
   @@map("asset_networks")
 }
 
-// System-wide KMS-managed wallets
-model SystemWallet {
-  id                 String            @id @default(cuid())
-  assetNetworkId     String
-  networkId          String            // Direct reference for easier queries
-  
-  // KMS Integration
-  signatureId        String            @unique  // KMS signature ID for wallet/mnemonic
-  walletType         WalletType        @default(MNEMONIC)
-  xpub               String?           // Extended public key from KMS
-  derivationPath     String            @default("m/44'/60'/0'/0") // HD derivation path
-  
-  // Address Management
-  nextAddressIndex   BigInt            @default(0)
-  totalBalance       Decimal           @default(0) @db.Decimal(36, 18)
-  
-  // Status
-  status             WalletStatus      @default(PENDING_SETUP)
-  metadata           Json?             // Additional KMS data, configuration
-  createdAt          DateTime          @default(now())
-  updatedAt          DateTime          @updatedAt
-  
-  // Relations
-  assetNetwork       AssetNetwork      @relation(fields: [assetNetworkId], references: [id])
-  network            Network           @relation(fields: [networkId], references: [id])
-  merchantWallets    MerchantWallet[]
-  paymentAddresses   PaymentAddress[]
-
-  @@index([status])
-  @@index([assetNetworkId])
-  @@index([networkId])
-  @@index([signatureId])
-  @@map("system_wallets")
-}
-
-// Merchant-specific wallet balances and settings
+// Balances belong to a specific AssetNetwork (NOT to a KMS wallet)
 model MerchantWallet {
-  id                    String        @id @default(cuid())
-  merchantId            String
-  systemWalletId        String
-  
-  // Balances
-  availableBalance      Decimal       @default(0) @db.Decimal(36, 18)  // Confirmed balance
-  pendingBalance        Decimal       @default(0) @db.Decimal(36, 18)  // Unconfirmed
-  lockedBalance         Decimal       @default(0) @db.Decimal(36, 18)  // Reserved for withdrawals
-  
-  // Statistics
-  totalReceived         Decimal       @default(0) @db.Decimal(36, 18)
-  totalWithdrawn        Decimal       @default(0) @db.Decimal(36, 18)
-  
-  // Auto-withdrawal settings
-  autoWithdrawEnabled   Boolean       @default(false)
-  autoWithdrawAddress   String?
-  autoWithdrawThreshold Decimal?      @db.Decimal(36, 18)
-  
-  // Metadata
-  lastActivityAt        DateTime?
-  statistics            Json?         // Additional metrics
-  createdAt             DateTime      @default(now())
-  updatedAt             DateTime      @updatedAt
-  
-  // Relations
-  merchant              Merchant      @relation(fields: [merchantId], references: [id], onDelete: Cascade)
-  systemWallet          SystemWallet  @relation(fields: [systemWalletId], references: [id])
-  paymentAddresses      PaymentAddress[]
+  id               String        @id @default(cuid())
+  merchantId       String
+  assetNetworkId   String
 
-  @@unique([merchantId, systemWalletId])
-  @@index([merchantId])
-  @@index([systemWalletId])
-  @@index([availableBalance])
+  availableBalance Decimal       @default(0) @db.Decimal(36, 18)
+  pendingBalance   Decimal       @default(0) @db.Decimal(36, 18)
+  lockedBalance    Decimal       @default(0) @db.Decimal(36, 18)
+
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  merchant         Merchant      @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  assetNetwork     AssetNetwork  @relation(fields: [assetNetworkId], references: [id])
+
+  @@unique([merchantId, assetNetworkId])
   @@map("merchant_wallets")
 }
 
-// Individual payment addresses
+// Each deposit address is tied to BOTH the KMS wallet (for derivation) AND the AssetNetwork (for token/native semantics)
 model PaymentAddress {
-  id                   String         @id @default(cuid())
-  systemWalletId       String
-  merchantWalletId     String
-  merchantId           String         // Direct reference for easier queries
-  
-  // Address details
-  address              String         @unique
+  id                   String        @id @default(cuid())
+  kmsWalletId          String
+  assetNetworkId       String
+  merchantId           String
+
+  address              String        @unique
   derivationIndex      BigInt
-  addressSignatureId   String?        @unique  // KMS signature ID if stored separately
-  
-  // Assignment
-  invoiceId            String?        @unique  // One address per invoice
-  balance              Decimal        @default(0) @db.Decimal(36, 18)
-  
-  // Tatum monitoring
-  tatumSubscriptionId  String?        @unique
-  subscriptionActive   Boolean        @default(false)
-  
-  // Activity tracking
+  addressSignatureId   String?       @unique   // if you persist KMS per-address signatureId
+  invoiceId            String?       @unique
+
+  balance              Decimal       @default(0) @db.Decimal(36, 18)
+  tatumSubscriptionId  String?       @unique
+  subscriptionActive   Boolean       @default(false)
   firstSeenAt          DateTime?
   lastSeenAt           DateTime?
   metadata             Json?
-  createdAt            DateTime       @default(now())
-  
-  // Relations
-  systemWallet         SystemWallet   @relation(fields: [systemWalletId], references: [id])
-  merchantWallet       MerchantWallet @relation(fields: [merchantWalletId], references: [id])
-  merchant             Merchant       @relation(fields: [merchantId], references: [id])
+  createdAt            DateTime      @default(now())
+  updatedAt            DateTime      @updatedAt
+
+  kmsWallet            KmsWallet     @relation(fields: [kmsWalletId], references: [id])
+  assetNetwork         AssetNetwork  @relation(fields: [assetNetworkId], references: [id])
+  merchant             Merchant      @relation(fields: [merchantId], references: [id])
   invoice              Invoice?
+
   webhookNotifications WebhookNotification[]
 
-  @@index([systemWalletId])
-  @@index([merchantWalletId])
+  @@index([kmsWalletId])
+  @@index([assetNetworkId])
   @@index([merchantId])
-  @@index([derivationIndex])
-  @@index([invoiceId])
-  @@index([addressSignatureId])
-  @@index([tatumSubscriptionId])
-  @@index([subscriptionActive])
   @@map("payment_addresses")
 }
 
@@ -692,4 +631,10 @@ enum WebhookEventType {
   INVOICE_CANCELLED
   TRANSACTION_CONFIRMED
   TRANSACTION_FAILED
+}
+
+enum WalletPurpose {
+  DEPOSIT
+  WITHDRAWAL
+  BOTH
 }

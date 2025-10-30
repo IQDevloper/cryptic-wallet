@@ -5,9 +5,14 @@ export default async function getMerchant(merchantId: string) {
     const merchant = await prisma.merchant.findUnique({
         where: { id: merchantId },
         include: {
-            merchantBalances: {
+            merchantWallets: {
                 include: {
-                    wallet: true
+                    assetNetwork: {
+                        include: {
+                            asset: true,
+                            network: true
+                        }
+                    }
                 }
             },
             invoices: {
@@ -24,17 +29,11 @@ export default async function getMerchant(merchantId: string) {
     // Serialize Decimal and BigInt values to strings for Client Component compatibility
     const serializedMerchant = {
         ...merchant,
-        merchantBalances: merchant.merchantBalances.map(balance => ({
-            ...balance,
-            balance: balance.balance.toString(),
-            lockedBalance: balance.lockedBalance.toString(),
-            totalReceived: balance.totalReceived.toString(),
-            totalWithdrawn: balance.totalWithdrawn.toString(),
-            wallet: {
-                ...balance.wallet,
-                totalPoolBalance: balance.wallet.totalPoolBalance.toString(),
-                nextAddressIndex: balance.wallet.nextAddressIndex.toString()
-            }
+        merchantWallets: merchant.merchantWallets.map(wallet => ({
+            ...wallet,
+            availableBalance: wallet.availableBalance.toString(),
+            pendingBalance: wallet.pendingBalance.toString(),
+            lockedBalance: wallet.lockedBalance.toString(),
         })),
         invoices: merchant.invoices.map(invoice => ({
             ...invoice,

@@ -77,7 +77,17 @@ const assetNetworks: AssetNetworkSeed[] = [
 ]
 
 async function main() {
-  console.log('🌱 Starting database seed...')
+  console.log('🌱 Starting database seed...');
+
+  // Delete in correct order to avoid foreign key constraints
+  await prisma.paymentAddress.deleteMany()
+  await prisma.merchantWallet.deleteMany()
+  await prisma.systemWallet.deleteMany()
+  await prisma.assetNetwork.deleteMany()
+  await prisma.asset.deleteMany()
+  await prisma.network.deleteMany()
+
+  console.log('🌱 Database cleared successfully');
 }
 
 main()
