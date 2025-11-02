@@ -1,0 +1,26 @@
+{
+  "bitcoin": {
+    "signatureId": "placeholder-bitcoin-1762053827226"
+  },
+  "ethereum": {
+    "signatureId": "placeholder-ethereum-1762053827228"
+  },
+  "bsc": {
+    "signatureId": "placeholder-bsc-1762053827228"
+  },
+  "polygon": {
+    "signatureId": "placeholder-polygon-1762053827229"
+  },
+  "tron": {
+    "signatureId": "placeholder-tron-1762053827230"
+  },
+  "litecoin": {
+    "signatureId": "placeholder-litecoin-1762053827231"
+  },
+  "dogecoin": {
+    "signatureId": "placeholder-dogecoin-1762053827232"
+  },
+  "bitcoin-cash": {
+    "signatureId": "placeholder-bitcoin-cash-1762053827232"
+  }
+}

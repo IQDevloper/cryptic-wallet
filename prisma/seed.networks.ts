@@ -433,19 +433,19 @@ async function seedKMSWallets(
       // Generate placeholder signature ID
       const placeholderSignatureId = `placeholder-${networkCode}-${Date.now()}`;
       
-      // Create KMS wallet record with placeholder data
+      // Create KMS wallet record with ACTIVE status for immediate use
       await prisma.kmsWallet.upsert({
         where: { networkId_signatureId: { networkId, signatureId: placeholderSignatureId } },
         update: {
           derivationPath: config.derivationPath,
-          status: WalletStatus.PENDING_SETUP,
+          status: WalletStatus.ACTIVE, // Set to ACTIVE for development
         },
         create: {
           networkId,
           signatureId: placeholderSignatureId,
           derivationPath: config.derivationPath,
           label: `${config.name} Deposit Wallet`,
-          status: WalletStatus.PENDING_SETUP,
+          status: WalletStatus.ACTIVE, // Set to ACTIVE for development
         },
       });
 

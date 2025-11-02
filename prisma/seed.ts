@@ -82,7 +82,7 @@ async function main() {
   // Delete in correct order to avoid foreign key constraints
   await prisma.paymentAddress.deleteMany()
   await prisma.merchantWallet.deleteMany()
-  await prisma.systemWallet.deleteMany()
+  await prisma.kmsWallet.deleteMany()
   await prisma.assetNetwork.deleteMany()
   await prisma.asset.deleteMany()
   await prisma.network.deleteMany()

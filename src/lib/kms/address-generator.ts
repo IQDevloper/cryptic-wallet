@@ -31,26 +31,29 @@ export interface AddressResult {
  * This is 100x faster than the Docker-based approach
  */
 export async function generateAddressFast(
-  walletId: string, 
+  kmsWalletId: string,
+  assetNetworkId: string,
   merchantId: string,
   currency?: string
 ): Promise<AddressResult> {
   try {
-    // Get the KMS wallet
-    const wallet = await prisma.systemWallet.findUnique({
-      where: { 
-        id: walletId,
-        status: 'ACTIVE'
+    // Get the KMS wallet with network info
+    const kmsWallet = await prisma.kmsWallet.findUnique({
+      where: {
+        id: kmsWalletId
+      },
+      include: {
+        network: true
       }
     })
 
-    if (!wallet) {
-      throw new Error(`Active wallet not found: ${walletId}`)
+    if (!kmsWallet || kmsWallet.status !== 'ACTIVE') {
+      throw new Error(`Active KMS wallet not found: ${kmsWalletId}`)
     }
 
     // Get the next address index and increment it atomically
-    const updatedWallet = await prisma.systemWallet.update({
-      where: { id: walletId },
+    const updatedWallet = await prisma.kmsWallet.update({
+      where: { id: kmsWalletId },
       data: {
         nextAddressIndex: {
           increment: 1
@@ -62,19 +65,21 @@ export async function generateAddressFast(
 
     // Generate address using fast ethers derivation instead of Docker
     const addressData = await generateAddressFastEthers(
-      wallet.signatureId,
-      wallet.assetNetworkId,
-      wallet.networkId,
+      kmsWallet.signatureId,
+      currency || 'ETH', // Currency for address type detection
+      kmsWallet.network.code,
       addressIndex
     )
 
-    // Create address record in database
+    // Create address record in database with proper assetNetworkId
     const address = await prisma.paymentAddress.create({
       data: {
-        systemWalletId: wallet.id,
+        kmsWalletId: kmsWallet.id,
+        assetNetworkId, // Required foreign key
         merchantId,
         address: addressData.address,
         derivationIndex: addressIndex,
+        addressSignatureId: addressData.signatureId,
         balance: 0
       }
     })
@@ -101,25 +106,28 @@ export async function generateAddressFast(
  * This creates a KMS address using Tatum KMS system
  */
 export async function generateAddress(
-  walletId: string, 
+  kmsWalletId: string,
+  assetNetworkId: string,
   merchantId: string,
 ): Promise<AddressResult> {
   try {
-    // Get the KMS wallet
-    const wallet = await prisma.systemWallet.findUnique({
-      where: { 
-        id: walletId,
-        status: 'ACTIVE'
+    // Get the KMS wallet with network info
+    const kmsWallet = await prisma.kmsWallet.findUnique({
+      where: {
+        id: kmsWalletId
+      },
+      include: {
+        network: true
       }
     })
 
-    if (!wallet) {
-      throw new Error(`Active wallet not found: ${walletId}`)
+    if (!kmsWallet || kmsWallet.status !== 'ACTIVE') {
+      throw new Error(`Active KMS wallet not found: ${kmsWalletId}`)
     }
 
     // Get the next address index and increment it atomically
-    const updatedWallet = await prisma.systemWallet.update({
-      where: { id: walletId },
+    const updatedWallet = await prisma.kmsWallet.update({
+      where: { id: kmsWalletId },
       data: {
         nextAddressIndex: {
           increment: 1
@@ -129,22 +137,24 @@ export async function generateAddress(
 
     const addressIndex = updatedWallet.nextAddressIndex - BigInt(1) // Use the previous index
 
-    // Generate KMS address using Tatum KMS
+    // Generate KMS address using Tatum KMS Docker
     const addressData = await generateKMSAddress(
-      wallet.signatureId,
-      wallet.assetNetworkId,
-      wallet.networkId,
+      kmsWallet.signatureId,
+      'NATIVE', // Currency placeholder
+      kmsWallet.network.code,
       addressIndex,
-      wallet.contractAddress
+      null // No contract address for native
     )
 
-    // Create address record in database
+    // Create address record in database with proper assetNetworkId
     const address = await prisma.paymentAddress.create({
       data: {
-        systemWalletId: wallet.id,
+        kmsWalletId: kmsWallet.id,
+        assetNetworkId, // Required foreign key
         merchantId,
         address: addressData.address,
         derivationIndex: addressIndex,
+        addressSignatureId: addressData.signatureId,
         balance: 0
       }
     })
@@ -258,7 +268,17 @@ export async function getAddressByDeposit(depositAddress: string) {
   return await prisma.paymentAddress.findUnique({
     where: { address: depositAddress.toLowerCase() },
     include: {
-      systemWallet: true,
+      kmsWallet: {
+        include: {
+          network: true
+        }
+      },
+      assetNetwork: {
+        include: {
+          asset: true,
+          network: true
+        }
+      },
       merchant: true
     }
   })
@@ -288,7 +308,7 @@ export async function updateAddressBalance(addressId: string, newBalance: number
 
 /**
  * FAST address generation using local cryptographic libraries
- * This bypasses Docker completely and generates addresses locally for multiple cryptocurrencies
+ * Uses xPub from database for secure, deterministic address generation
  */
 async function generateAddressFastEthers(
   walletSignatureId: string,
@@ -300,50 +320,43 @@ async function generateAddressFastEthers(
   signatureId: string
 }> {
   try {
-    console.log(`⚡ Generating ${currency} address using fast local derivation...`)
-    
-    // Create a master seed for HD derivation
-    // In production, you'd use the actual master seed/xpub from the wallet
-    const masterSeed = ethers.randomBytes(32)
-    
+    console.log(`⚡ Generating ${currency} address using HD derivation from xPub...`)
+
+    // Get the KMS wallet with xPub from database
+    const kmsWallet = await prisma.kmsWallet.findFirst({
+      where: { signatureId: walletSignatureId },
+      include: { network: true }
+    })
+
+    if (!kmsWallet) {
+      throw new Error(`KMS wallet not found for signature ID: ${walletSignatureId}`)
+    }
+
+    // Check if xPub exists - if not, we need to use Docker KMS
+    if (!kmsWallet.xpub) {
+      console.log(`⚠️ No xPub found for ${walletSignatureId}, falling back to Docker KMS...`)
+      return await generateKMSAddress(walletSignatureId, currency, network, derivationIndex)
+    }
+
     // EVM-compatible chains (Ethereum, BSC, Polygon, Arbitrum, etc.)
     if (isEVMChain(currency, network)) {
-      return generateEVMAddress(walletSignatureId, derivationIndex, masterSeed)
+      return generateEVMAddressFromXPub(walletSignatureId, derivationIndex, kmsWallet.xpub)
     }
     
-    // Bitcoin and Bitcoin-like chains
+    // Bitcoin and Bitcoin-like chains - need xPub derivation
     if (isBitcoinLike(currency)) {
-      return generateBitcoinLikeAddress(walletSignatureId, currency, derivationIndex, masterSeed)
+      console.log(`⚠️ Bitcoin derivation requires xPub - falling back to Docker KMS...`)
+      return await generateKMSAddress(walletSignatureId, currency, network, derivationIndex)
     }
-    
+
     // TRON network
     if (currency === 'TRX' || network.toLowerCase().includes('tron')) {
-      return generateTronAddress(walletSignatureId, derivationIndex, masterSeed)
+      // TRON uses same derivation as Ethereum
+      return generateEVMAddressFromXPub(walletSignatureId, derivationIndex, kmsWallet.xpub)
     }
-    
-    // Litecoin
-    if (currency === 'LTC') {
-      return generateLitecoinAddress(walletSignatureId, derivationIndex, masterSeed)
-    }
-    
-    // Dogecoin
-    if (currency === 'DOGE') {
-      return generateDogecoinAddress(walletSignatureId, derivationIndex, masterSeed)
-    }
-    
-    // Dash
-    if (currency === 'DASH') {
-      return generateDashAddress(walletSignatureId, derivationIndex, masterSeed)
-    }
-    
-    // Solana (placeholder - requires Ed25519)
-    if (currency === 'SOL') {
-      console.log(`⚠️ Solana address generation requires Ed25519 - implementing placeholder`)
-      return generateSolanaPlaceholder(walletSignatureId, derivationIndex)
-    }
-    
+
     // For unsupported currencies, fall back to KMS Docker
-    console.log(`⚠️ Falling back to Docker for ${currency} - native derivation not yet implemented`)
+    console.log(`⚠️ Falling back to Docker KMS for ${currency}...`)
     return await generateKMSAddress(walletSignatureId, currency, network, derivationIndex)
     
   } catch (error) {
@@ -371,7 +384,38 @@ function isBitcoinLike(currency: string): boolean {
 }
 
 /**
- * Generate EVM-compatible address (Ethereum, BSC, Polygon, etc.)
+ * Generate EVM-compatible address from Extended Public Key (xPub)
+ * This is the SECURE method - derives addresses without exposing private keys
+ */
+function generateEVMAddressFromXPub(
+  walletSignatureId: string,
+  derivationIndex: bigint,
+  xpub: string
+): { address: string; signatureId: string } {
+  try {
+    // Parse the extended public key
+    const hdNode = ethers.HDNodeWallet.fromExtendedKey(xpub)
+
+    // Derive child address at the specified index
+    // BIP44 path: m/44'/60'/0'/0/{index} but we start from xPub which is at m/44'/60'/0'
+    // So we only need to derive: 0/{index}
+    const childNode = hdNode.derivePath(`0/${derivationIndex}`)
+
+    console.log(`✅ Generated EVM address from xPub: ${childNode.address} at index ${derivationIndex}`)
+
+    return {
+      address: childNode.address,
+      signatureId: `${walletSignatureId}_${derivationIndex}`
+    }
+  } catch (error) {
+    console.error(`❌ Failed to derive address from xPub:`, error)
+    throw new Error(`xPub derivation failed: ${error instanceof Error ? error.message : 'Unknown error'}`)
+  }
+}
+
+/**
+ * @deprecated Use generateEVMAddressFromXPub instead
+ * Generate EVM-compatible address (Old method with random seed - DO NOT USE)
  */
 function generateEVMAddress(
   walletSignatureId: string,
@@ -381,9 +425,9 @@ function generateEVMAddress(
   // Create HD wallet from master seed
   const mnemonic = ethers.Mnemonic.fromEntropy(masterSeed)
   const hdNode = ethers.HDNodeWallet.fromMnemonic(mnemonic, `m/44'/60'/0'/0/${derivationIndex}`)
-  
-  console.log(`✅ Generated EVM address: ${hdNode.address} instantly`)
-  
+
+  console.log(`⚠️ WARNING: Using deprecated random seed method! Address: ${hdNode.address}`)
+
   return {
     address: hdNode.address,
     signatureId: `${walletSignatureId}_${derivationIndex}`

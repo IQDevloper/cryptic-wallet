@@ -26,7 +26,6 @@ export function WithdrawalForm({ merchantId }: WithdrawalFormProps) {
   // Get unified balances to show available amounts
   const { data: unifiedBalances } = trpc.merchant.getBalances.useQuery({
     merchantId,
-    unified: true,
   })
 
   // Withdrawal mutation
@@ -44,8 +43,8 @@ export function WithdrawalForm({ merchantId }: WithdrawalFormProps) {
 
   // Available networks for selected currency
   const selectedCurrencyData = unifiedBalances?.find(b => b.currency === currency)
-  const availableNetworks = selectedCurrencyData 
-    ? Object.keys(selectedCurrencyData.networkBreakdown)
+  const availableNetworks = unifiedBalances
+    ? unifiedBalances.filter(b => b.currency === currency).map(b => b.network)
     : []
 
   // Calculate estimated fees and routing
@@ -68,8 +67,7 @@ export function WithdrawalForm({ merchantId }: WithdrawalFormProps) {
     const networkFee = networkFees[targetNetwork] || 1.0
     
     // Check if we can withdraw directly from target network
-    const targetNetworkBalance = selectedCurrencyData.networkBreakdown[targetNetwork]
-    const canWithdrawDirect = targetNetworkBalance && targetNetworkBalance.available >= amountNum
+    const canWithdrawDirect = selectedCurrencyData.network === targetNetwork && selectedCurrencyData.availableBalance >= amountNum
     
     return {
       needsBridging: !canWithdrawDirect,

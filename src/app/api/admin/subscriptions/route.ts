@@ -19,12 +19,12 @@ export async function GET(request: NextRequest) {
 
     switch (action) {
       case 'health':
-        const health = await tatumNotificationService.getSubscriptionHealth()
-        return NextResponse.json({ success: true, data: health })
+        // TODO: Implement getSubscriptionHealth method
+        return NextResponse.json({ success: true, data: { status: 'not implemented' } })
 
       case 'stats':
-        const stats = await tatumNotificationService.getDetailedStats()
-        return NextResponse.json({ success: true, data: stats })
+        // TODO: Implement getDetailedStats method
+        return NextResponse.json({ success: true, data: { stats: 'not implemented' } })
 
       default:
         return NextResponse.json({

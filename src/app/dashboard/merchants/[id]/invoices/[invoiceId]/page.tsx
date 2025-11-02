@@ -1,283 +1,410 @@
 'use client'
 
-import { useParams } from 'next/navigation'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { useParams, useRouter } from 'next/navigation'
+import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { trpc } from '@/lib/trpc/client'
-import { Copy, ExternalLink, QrCode } from 'lucide-react'
-import { useState } from 'react'
+import {
+  Copy,
+  Check,
+  ArrowLeft,
+  Clock,
+  Wallet,
+  AlertCircle,
+  CheckCircle2,
+  XCircle,
+  Timer
+} from 'lucide-react'
+import { useState, useEffect } from 'react'
 import { toast } from 'sonner'
-import { 
-  getNetworkDisplayStandard, 
+import QRCode from 'react-qr-code'
+import {
+  getNetworkDisplayStandard,
   getCurrencyIcon,
   formatCurrencyAmount,
-  getNetworkColor 
+  getNetworkColor
 } from '@/lib/crypto-assets-config'
+import { cn } from '@/lib/utils'
 
 export default function InvoicePage() {
+  const router = useRouter()
   const params = useParams()
   const merchantId = params.id as string
   const invoiceId = params.invoiceId as string
-  const [showQR, setShowQR] = useState(false)
+  const [copied, setCopied] = useState(false)
+  const [timeLeft, setTimeLeft] = useState<string>('')
 
   const { data: invoice, isLoading, error } = trpc.invoice.get.useQuery({
     merchantId,
     invoiceId
   })
 
-  const copyToClipboard = (text: string, label: string) => {
-    navigator.clipboard.writeText(text)
-    toast.success(`${label} copied to clipboard`)
+  // Calculate time remaining
+  useEffect(() => {
+    if (!invoice?.expiresAt) return
+
+    const interval = setInterval(() => {
+      const now = new Date().getTime()
+      const expiry = new Date(invoice.expiresAt).getTime()
+      const distance = expiry - now
+
+      if (distance < 0) {
+        setTimeLeft('Expired')
+        clearInterval(interval)
+        return
+      }
+
+      const hours = Math.floor((distance % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60))
+      const minutes = Math.floor((distance % (1000 * 60 * 60)) / (1000 * 60))
+      const seconds = Math.floor((distance % (1000 * 60)) / 1000)
+
+      setTimeLeft(`${hours}h ${minutes}m ${seconds}s`)
+    }, 1000)
+
+    return () => clearInterval(interval)
+  }, [invoice?.expiresAt])
+
+  const copyToClipboard = async (text: string, label: string) => {
+    await navigator.clipboard.writeText(text)
+    setCopied(true)
+    toast.success(`${label} copied!`)
+    setTimeout(() => setCopied(false), 2000)
+  }
+
+  const getStatusIcon = (status: string) => {
+    switch (status) {
+      case 'PAID':
+        return <CheckCircle2 className="h-4 w-4" />
+      case 'EXPIRED':
+        return <XCircle className="h-4 w-4" />
+      case 'CANCELLED':
+        return <XCircle className="h-4 w-4" />
+      case 'PENDING':
+      default:
+        return <Timer className="h-4 w-4" />
+    }
+  }
+
+  const getStatusConfig = (status: string) => {
+    switch (status) {
+      case 'PAID':
+        return {
+          bg: 'bg-green-500/10',
+          text: 'text-green-500',
+          border: 'border-green-500/20'
+        }
+      case 'PENDING':
+        return {
+          bg: 'bg-yellow-500/10',
+          text: 'text-yellow-500',
+          border: 'border-yellow-500/20'
+        }
+      case 'EXPIRED':
+        return {
+          bg: 'bg-red-500/10',
+          text: 'text-red-500',
+          border: 'border-red-500/20'
+        }
+      default:
+        return {
+          bg: 'bg-muted',
+          text: 'text-muted-foreground',
+          border: 'border-muted'
+        }
+    }
   }
 
   if (isLoading) {
     return (
-      <div className="container mx-auto py-8">
-        <div className="max-w-4xl mx-auto space-y-6">
-          <div className="h-8 w-48 bg-gray-200 rounded animate-pulse" />
-          <Card>
-            <CardContent className="p-6">
-              <div className="space-y-4">
-                <div className="h-4 w-32 bg-gray-200 rounded animate-pulse" />
-                <div className="h-4 w-48 bg-gray-200 rounded animate-pulse" />
-                <div className="h-4 w-64 bg-gray-200 rounded animate-pulse" />
-              </div>
-            </CardContent>
-          </Card>
+      <div className="min-h-screen bg-background p-4 md:p-8">
+        <div className="max-w-6xl mx-auto space-y-6">
+          <div className="h-12 w-64 bg-card/50 rounded-lg animate-pulse" />
+          <div className="grid gap-6 lg:grid-cols-3">
+            <div className="lg:col-span-2 h-[600px] bg-card/50 rounded-xl animate-pulse" />
+            <div className="h-[600px] bg-card/50 rounded-xl animate-pulse" />
+          </div>
         </div>
       </div>
     )
   }
 
-  if (error) {
+  if (error || !invoice) {
     return (
-      <div className="container mx-auto py-8">
-        <div className="max-w-4xl mx-auto">
-          <Card>
-            <CardContent className="p-6 text-center">
-              <p className="text-red-500">Error loading invoice: {error.message}</p>
-            </CardContent>
-          </Card>
-        </div>
+      <div className="min-h-screen bg-background p-4 md:p-8 flex items-center justify-center">
+        <Card className="max-w-md w-full">
+          <CardContent className="p-8 text-center">
+            <AlertCircle className="h-12 w-12 text-red-500 mx-auto mb-4" />
+            <h3 className="text-lg font-semibold mb-2">Invoice Not Found</h3>
+            <p className="text-sm text-muted-foreground mb-6">
+              {error?.message || 'The requested invoice could not be loaded.'}
+            </p>
+            <Button onClick={() => router.back()} variant="outline">
+              <ArrowLeft className="h-4 w-4 mr-2" />
+              Go Back
+            </Button>
+          </CardContent>
+        </Card>
       </div>
     )
   }
 
-  if (!invoice) {
-    return (
-      <div className="container mx-auto py-8">
-        <div className="max-w-4xl mx-auto">
-          <Card>
-            <CardContent className="p-6 text-center">
-              <p className="text-muted-foreground">Invoice not found</p>
-            </CardContent>
-          </Card>
-        </div>
-      </div>
-    )
-  }
-
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'PENDING':
-        return 'bg-yellow-100 text-yellow-800'
-      case 'PAID':
-        return 'bg-green-100 text-green-800'
-      case 'EXPIRED':
-        return 'bg-red-100 text-red-800'
-      case 'CANCELLED':
-        return 'bg-gray-100 text-gray-800'
-      default:
-        return 'bg-blue-100 text-blue-800'
-    }
-  }
+  const statusConfig = getStatusConfig(invoice.status)
 
   return (
-    <div className="container mx-auto py-8">
-      <div className="max-w-4xl mx-auto space-y-6">
+    <div className="min-h-screen bg-background p-4 md:p-8">
+      <div className="max-w-6xl mx-auto space-y-6">
+
         {/* Header */}
         <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-3xl font-bold">Invoice {invoice.id.slice(-8)}</h1>
-            <p className="text-muted-foreground">
-              Created {new Date(invoice.createdAt).toLocaleString()}
-            </p>
+          <div className="flex items-center gap-4">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => router.back()}
+              className="rounded-lg"
+            >
+              <ArrowLeft className="h-5 w-5" />
+            </Button>
+            <div>
+              <h1 className="text-2xl font-bold text-foreground">
+                Payment Invoice
+              </h1>
+              <p className="text-sm text-muted-foreground">
+                Invoice #{invoice.id.slice(-8).toUpperCase()}
+              </p>
+            </div>
           </div>
-          <Badge className={getStatusColor(invoice.status)}>
+          <Badge
+            className={cn(
+              "flex items-center gap-2 px-4 py-2 border",
+              statusConfig.bg,
+              statusConfig.text,
+              statusConfig.border
+            )}
+          >
+            {getStatusIcon(invoice.status)}
             {invoice.status}
           </Badge>
         </div>
 
-        <div className="grid gap-6 md:grid-cols-2">
-          {/* Payment Details */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Payment Details</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div>
-                <p className="text-sm font-medium text-muted-foreground">Amount</p>
-                <div className="flex items-center gap-2">
+        <div className="grid gap-6 lg:grid-cols-3">
+          {/* Main Payment Card */}
+          <Card className="lg:col-span-2 bg-card border-border">
+            <CardContent className="p-6 md:p-8 space-y-8">
+
+              {/* Amount Display */}
+              <div className="space-y-4">
+                <div className="flex items-center gap-4 p-6 bg-card rounded-xl border border-border">
                   {getCurrencyIcon(invoice.currency) && (
-                    <img 
-                      src={getCurrencyIcon(invoice.currency)!} 
+                    <img
+                      src={getCurrencyIcon(invoice.currency)!}
                       alt={invoice.currency}
-                      className="w-6 h-6 rounded-full"
+                      className="w-12 h-12 rounded-full"
                       onError={(e) => {
                         (e.target as HTMLImageElement).style.display = 'none'
                       }}
                     />
                   )}
-                  <p className="text-2xl font-bold">
-                    {formatCurrencyAmount(parseFloat(invoice.amount), invoice.currency)} {invoice.currency}
-                  </p>
-                </div>
-                <div className="flex items-center gap-2 mt-1">
-                  <p className="text-sm text-muted-foreground">Network:</p>
-                  <Badge 
-                    variant="secondary" 
-                    className="text-xs"
-                    style={{ 
-                      backgroundColor: getNetworkColor(invoice.currency, invoice.network) || undefined,
-                      color: getNetworkColor(invoice.currency, invoice.network) ? 'white' : undefined
+                  <div className="flex-1">
+                    <p className="text-xs text-muted-foreground font-medium uppercase mb-1">Amount Due</p>
+                    <div className="flex items-baseline gap-2">
+                      <p className="text-4xl font-bold text-primary">
+                        {formatCurrencyAmount(parseFloat(invoice.amount), invoice.currency)}
+                      </p>
+                      <p className="text-2xl font-semibold text-foreground">
+                        {invoice.currency}
+                      </p>
+                    </div>
+                  </div>
+                  <Badge
+                    className="text-xs font-medium"
+                    style={{
+                      backgroundColor: getNetworkColor(invoice.currency, invoice.network) || '#ef9f0b',
+                      color: 'white',
+                      border: 'none'
                     }}
                   >
                     {getNetworkDisplayStandard(invoice.currency, invoice.network)}
                   </Badge>
                 </div>
+
+                {invoice.status === 'PENDING' && timeLeft && timeLeft !== 'Expired' && (
+                  <div className="flex items-center justify-center gap-2 text-sm text-yellow-500 bg-yellow-500/10 px-4 py-2 rounded-lg border border-yellow-500/20">
+                    <Clock className="h-4 w-4" />
+                    <span className="font-medium">Expires in {timeLeft}</span>
+                  </div>
+                )}
               </div>
 
-              {invoice.description && (
-                <div>
-                  <p className="text-sm font-medium text-muted-foreground">Description</p>
-                  <p>{invoice.description}</p>
+              {/* Payment Address */}
+              <div className="space-y-3">
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Wallet className="h-4 w-4" />
+                  <span>Send {invoice.currency} to this address</span>
                 </div>
-              )}
 
-              {invoice.orderId && (
-                <div>
-                  <p className="text-sm font-medium text-muted-foreground">Order ID</p>
-                  <p className="font-mono">{invoice.orderId}</p>
-                </div>
-              )}
-
-              <div>
-                <p className="text-sm font-medium text-muted-foreground">Expires</p>
-                <p>{new Date(invoice.expiresAt).toLocaleString()}</p>
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Payment Instructions */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Payment Instructions</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div>
-                <p className="text-sm font-medium text-muted-foreground mb-2">
-                  Send Payment To:
-                </p>
-                <div className="flex items-center gap-2 p-3 bg-gray-50 rounded-lg">
-                  <code className="flex-1 text-sm break-all font-mono">
+                <div className="flex flex-wrap items-start gap-2 p-4 bg-card rounded-lg border border-border hover:border-primary/50 transition-colors">
+                  <code className="flex-1 min-w-0 text-sm font-mono break-all whitespace-normal text-foreground">
                     {invoice.depositAddress}
                   </code>
                   <Button
                     size="sm"
-                    variant="outline"
+                    variant="ghost"
+                    className="shrink-0 h-8 w-8 p-0"
                     onClick={() => copyToClipboard(invoice.depositAddress, 'Address')}
                   >
-                    <Copy className="h-4 w-4" />
+                    {copied ? (
+                      <Check className="h-4 w-4 text-green-500" />
+                    ) : (
+                      <Copy className="h-4 w-4" />
+                    )}
                   </Button>
                 </div>
               </div>
 
-              <div className="flex gap-2">
-                <Button
-                  variant="outline"
-                  onClick={() => setShowQR(!showQR)}
-                  className="flex-1"
-                >
-                  <QrCode className="h-4 w-4 mr-2" />
-                  {showQR ? 'Hide QR' : 'Show QR'}
-                </Button>
-                <Button
-                  variant="outline"
-                  onClick={() => copyToClipboard(
-                    invoice.qrCodeData || invoice.depositAddress, 
-                    'Payment URI'
-                  )}
-                  className="flex-1"
-                >
-                  <ExternalLink className="h-4 w-4 mr-2" />
-                  Copy URI
-                </Button>
-              </div>
-
-              {showQR && (
-                <div className="flex justify-center p-4 bg-white border rounded-lg">
-                  {/* QR Code placeholder - you can add a QR code library here */}
-                  <div className="w-48 h-48 bg-gray-100 rounded-lg flex items-center justify-center">
-                    <div className="text-center">
-                      <QrCode className="h-12 w-12 mx-auto mb-2 text-gray-400" />
-                      <p className="text-sm text-gray-500">QR Code</p>
-                      <p className="text-xs text-gray-400 mt-1">
-                        Add QR library for display
-                      </p>
+              {/* Invoice Details */}
+              {(invoice.description || invoice.orderId) && (
+                <div className="grid gap-4 md:grid-cols-2 pt-6 border-t border-border">
+                  {invoice.description && (
+                    <div className="space-y-1">
+                      <p className="text-xs font-medium text-muted-foreground uppercase">Description</p>
+                      <p className="text-sm text-foreground">{invoice.description}</p>
                     </div>
+                  )}
+                  {invoice.orderId && (
+                    <div className="space-y-1">
+                      <p className="text-xs font-medium text-muted-foreground uppercase">Order ID</p>
+                      <p className="text-sm font-mono text-foreground">{invoice.orderId}</p>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Payment Progress */}
+              {invoice.amountPaid && parseFloat(invoice.amountPaid) > 0 && (
+                <div className="space-y-3 pt-6 border-t border-border">
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-muted-foreground">Payment Progress</span>
+                    <span className="font-medium text-foreground">
+                      {formatCurrencyAmount(parseFloat(invoice.amountPaid), invoice.currency)} / {formatCurrencyAmount(parseFloat(invoice.amount), invoice.currency)} {invoice.currency}
+                    </span>
+                  </div>
+                  <div className="h-2 bg-muted rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-green-500 rounded-full transition-all duration-500"
+                      style={{
+                        width: `${Math.min((parseFloat(invoice.amountPaid) / parseFloat(invoice.amount)) * 100, 100)}%`
+                      }}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Transactions */}
+              {invoice.transactions && invoice.transactions.length > 0 && (
+                <div className="space-y-3 pt-6 border-t border-border">
+                  <h4 className="text-sm font-medium flex items-center gap-2 text-foreground">
+                    <CheckCircle2 className="h-4 w-4 text-green-500" />
+                    Recent Transactions
+                  </h4>
+                  <div className="space-y-2">
+                    {invoice.transactions.slice(0, 3).map((tx: any) => (
+                      <div
+                        key={tx.id}
+                        className="flex items-center justify-between p-3 bg-green-500/10 rounded-lg border border-green-500/20"
+                      >
+                        <div className="flex-1 min-w-0">
+                          <p className="font-mono text-xs text-muted-foreground truncate">
+                            {tx.txHash}
+                          </p>
+                          <p className="text-xs text-green-500 font-medium mt-1">
+                            +{formatCurrencyAmount(parseFloat(tx.amount), invoice.currency)} {invoice.currency}
+                          </p>
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 </div>
               )}
             </CardContent>
           </Card>
+
+          {/* QR Code Card */}
+          <Card className="bg-card border-border">
+            <CardContent className="p-6 space-y-6">
+              <div className="text-center space-y-2">
+                <h3 className="font-semibold text-lg text-foreground">Scan to Pay</h3>
+                <p className="text-xs text-muted-foreground">
+                  Scan with your {invoice.currency} wallet
+                </p>
+              </div>
+
+              {/* QR Code */}
+              <div className="flex justify-center p-6 bg-background rounded-xl border border-border">
+                <QRCode
+                  value={invoice.qrCodeData || invoice.depositAddress}
+                  size={200}
+                  level="H"
+                  style={{ height: "auto", maxWidth: "100%", width: "100%" }}
+                />
+              </div>
+
+              <Button
+                variant="outline"
+                className="w-full"
+                onClick={() => copyToClipboard(invoice.qrCodeData || invoice.depositAddress, 'Payment URI')}
+              >
+                <Copy className="h-4 w-4 mr-2" />
+                Copy Payment URI
+              </Button>
+
+              {/* Timeline */}
+              <div className="pt-6 border-t border-border space-y-3">
+                <div className="flex items-start gap-3 text-xs">
+                  <div className="h-2 w-2 rounded-full bg-primary mt-1" />
+                  <div className="flex-1">
+                    <p className="font-medium text-foreground">Created</p>
+                    <p className="text-muted-foreground">{new Date(invoice.createdAt).toLocaleString()}</p>
+                  </div>
+                </div>
+                <div className="flex items-start gap-3 text-xs">
+                  <div className={cn(
+                    "h-2 w-2 rounded-full mt-1",
+                    invoice.status === 'EXPIRED' || timeLeft === 'Expired' ? "bg-destructive" : "bg-yellow-500"
+                  )} />
+                  <div className="flex-1">
+                    <p className="font-medium text-foreground">Expires</p>
+                    <p className="text-muted-foreground">{new Date(invoice.expiresAt).toLocaleString()}</p>
+                  </div>
+                </div>
+                {invoice.paidAt && (
+                  <div className="flex items-start gap-3 text-xs">
+                    <div className="h-2 w-2 rounded-full bg-green-500 mt-1" />
+                    <div className="flex-1">
+                      <p className="font-medium text-foreground">Paid</p>
+                      <p className="text-muted-foreground">{new Date(invoice.paidAt).toLocaleString()}</p>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </CardContent>
+          </Card>
         </div>
 
-        {/* Status Information */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Status Information</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="grid gap-4 md:grid-cols-3">
-              <div>
-                <p className="text-sm font-medium text-muted-foreground">Status</p>
-                <Badge className={getStatusColor(invoice.status)}>
-                  {invoice.status}
-                </Badge>
+        {/* Payment Instructions */}
+        <Card className="bg-primary/5 border-primary/20">
+          <CardContent className="p-4">
+            <div className="flex gap-3">
+              <AlertCircle className="h-5 w-5 text-primary shrink-0 mt-0.5" />
+              <div className="space-y-1 text-sm">
+                <p className="font-medium text-foreground">Payment Instructions</p>
+                <p className="text-muted-foreground">
+                  Send exactly <strong className="text-foreground">{formatCurrencyAmount(parseFloat(invoice.amount), invoice.currency)} {invoice.currency}</strong> to the address above.
+                  The payment will be automatically confirmed once the transaction is verified on the blockchain.
+                </p>
               </div>
-              <div>
-                <p className="text-sm font-medium text-muted-foreground">Amount Paid</p>
-                <p>{formatCurrencyAmount(parseFloat(invoice.amountPaid || '0'), invoice.currency)} {invoice.currency}</p>
-              </div>
-              {invoice.paidAt && (
-                <div>
-                  <p className="text-sm font-medium text-muted-foreground">Paid At</p>
-                  <p>{new Date(invoice.paidAt).toLocaleString()}</p>
-                </div>
-              )}
             </div>
-
-            {invoice.transactions && invoice.transactions.length > 0 && (
-              <div className="mt-6">
-                <h4 className="font-medium mb-2">Recent Transactions</h4>
-                <div className="space-y-2">
-                  {invoice.transactions.map((tx) => (
-                    <div key={tx.id} className="flex items-center justify-between p-2 bg-gray-50 rounded">
-                      <div>
-                        <p className="font-mono text-sm">{tx.txHash}</p>
-                        <p className="text-xs text-muted-foreground">
-                          {formatCurrencyAmount(parseFloat(tx.amount), invoice.currency)} {invoice.currency} • {tx.status}
-                        </p>
-                      </div>
-                      <p className="text-xs text-muted-foreground">
-                        {new Date(tx.createdAt).toLocaleString()}
-                      </p>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
           </CardContent>
         </Card>
       </div>

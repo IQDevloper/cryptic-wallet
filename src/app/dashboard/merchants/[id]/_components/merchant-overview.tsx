@@ -89,8 +89,8 @@ export function MerchantOverview({ merchantId }: MerchantOverviewProps) {
 
       {/* Individual Balances */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-        {balances.map((balance) => (
-          <Card key={balance.id}>
+        {balances.map((balance, index) => (
+          <Card key={`${balance.currency}-${balance.network}-${index}`}>
             <CardHeader className="pb-3">
               <div className="flex items-center gap-2">
                 {balance.imageUrl ? (
@@ -200,7 +200,7 @@ export function MerchantOverview({ merchantId }: MerchantOverviewProps) {
           </CardHeader>
           <CardContent>
             <div className="text-lg font-bold">
-              {formatCurrency(balances.reduce((sum, b) => sum + (b.totalReceived * b.price), 0))}
+              {formatCurrency(balances.reduce((sum, b) => sum + (b.balance * b.price), 0))}
             </div>
           </CardContent>
         </Card>

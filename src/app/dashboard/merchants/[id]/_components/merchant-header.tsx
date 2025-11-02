@@ -19,7 +19,7 @@ export function MerchantHeader({ merchant }: { merchant: Merchant }) {
         <div>
           <h1 className="text-2xl font-bold">{merchant.name}</h1>
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <span>{merchant.email}</span>
+            {merchant.businessName && <span>{merchant.businessName}</span>}
             <Badge variant={merchant.isActive ? 'default' : 'secondary'}>
               {merchant.isActive ? 'Active' : 'Inactive'}
             </Badge>

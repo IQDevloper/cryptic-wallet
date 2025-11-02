@@ -2,22 +2,25 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
 import { trpc } from '@/lib/trpc/client'
 import { toast } from 'sonner'
 import { getSupportedCurrencies } from '@/lib/crypto-config'
 import Image from 'next/image'
+import { cn } from '@/lib/utils'
+import { Check, ChevronDown, Search } from 'lucide-react'
 
 interface CreateInvoiceFormProps {
   merchantId: string
 }
 
-// Determine if we're in testnet mode (this could come from an env variable or API)
+// Determine if we're in testnet mode
 const isTestnet = process.env.NEXT_PUBLIC_TATUM_ENVIRONMENT === 'testnet'
 
 // Get supported currencies from our crypto configuration
@@ -27,11 +30,15 @@ const CURRENCIES = getSupportedCurrencies().map(currency => ({
   name: isTestnet && !currency.name.includes('Testnet') ? `${currency.name} (Testnet)` : currency.name
 }))
 
+// Quick select popular currencies
+const QUICK_SELECT_CURRENCIES = ['ETH', 'BTC', 'USDT', 'USDC']
+
 export function CreateInvoiceForm({ merchantId }: CreateInvoiceFormProps) {
   const router = useRouter()
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [selectedCurrency, setSelectedCurrency] = useState('')
   const [selectedNetwork, setSelectedNetwork] = useState('')
+  const [openCurrencyDialog, setOpenCurrencyDialog] = useState(false)
   
   const createInvoice = trpc.invoice.create.useMutation({
     onSuccess: (invoice) => {
@@ -72,130 +79,215 @@ export function CreateInvoiceForm({ merchantId }: CreateInvoiceFormProps) {
   }
 
   const selectedCurrencyData = CURRENCIES.find(c => c.code === selectedCurrency)
+  const quickSelectCurrencies = CURRENCIES.filter(c => QUICK_SELECT_CURRENCIES.includes(c.code))
+  const otherCurrencies = CURRENCIES.filter(c => !QUICK_SELECT_CURRENCIES.includes(c.code))
 
   return (
-    <div className="max-w-2xl mx-auto">
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            Create New Invoice
-            {isTestnet && (
-              <span className="text-sm font-normal text-yellow-600 bg-yellow-100 px-2 py-1 rounded">
-                Testnet Mode
-              </span>
-            )}
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={handleSubmit} className="space-y-6">
-            <div className="grid gap-4 md:grid-cols-2">
-              <div className="space-y-2">
-                <Label htmlFor="amount">Amount *</Label>
-                <Input
-                  id="amount"
-                  name="amount"
-                  type="number"
-                  step="0.000001"
-                  min="0"
-                  placeholder="0.00"
-                  required
-                />
-              </div>
-
-              <div className="space-y-2">
-                <Label>Currency *</Label>
-                <Select
-                  value={selectedCurrency}
-                  onValueChange={(value) => {
-                    setSelectedCurrency(value)
-                    setSelectedNetwork('') // Reset network when currency changes
-                  }}
-                  required
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select currency" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {CURRENCIES.map((currency) => (
-                      <SelectItem key={currency.code} value={currency.code}>
-                        <div className="flex items-center gap-2">
-                          <Image 
-                            src={currency.icon} 
-                            alt={currency.code} 
-                            width={20} 
-                            height={20} 
-                            className="rounded-full"
-                          />
-                          <span>{currency.code} - {currency.name}</span>
-                        </div>
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-
-            {selectedCurrency && (
-              <div className="space-y-2">
-                <Label>Network *</Label>
-                <Select
-                  value={selectedNetwork}
-                  onValueChange={setSelectedNetwork}
-                  required
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select network" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {selectedCurrencyData?.networks.map((network) => (
-                      <SelectItem key={network.network} value={network.network}>
-                        {network.displayName || network.network.toUpperCase()}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
-
-            <div className="space-y-2">
-              <Label htmlFor="description">Description</Label>
-              <Textarea
-                id="description"
-                name="description"
-                placeholder="Payment for..."
-                rows={3}
+    <div className="max-w-3xl">
+      <form onSubmit={handleSubmit} className="space-y-6">
+        {/* Quick Select Currency Buttons */}
+        <div className="flex items-center gap-2 flex-wrap">
+          {quickSelectCurrencies.map((currency) => (
+            <button
+              key={currency.code}
+              type="button"
+              onClick={() => {
+                setSelectedCurrency(currency.code)
+                setSelectedNetwork('')
+              }}
+              className={cn(
+                "inline-flex items-center gap-2 px-4 py-2 rounded-full border text-sm font-medium transition-all",
+                selectedCurrency === currency.code
+                  ? "bg-primary text-primary-foreground border-primary shadow-sm"
+                  : "bg-background hover:bg-accent border-input"
+              )}
+            >
+              <Image
+                src={currency.icon}
+                alt={currency.code}
+                width={20}
+                height={20}
+                className="rounded-full"
               />
-            </div>
+              {currency.code}
+            </button>
+          ))}
 
-            <div className="space-y-2">
-              <Label htmlFor="orderId">Order ID</Label>
-              <Input
-                id="orderId"
-                name="orderId"
-                placeholder="Optional order reference"
-              />
-            </div>
-
-            <div className="flex gap-3">
-              <Button
+          {/* More Button with Dialog */}
+          <Dialog open={openCurrencyDialog} onOpenChange={setOpenCurrencyDialog}>
+            <DialogTrigger asChild>
+              <button
                 type="button"
-                variant="outline"
-                onClick={() => router.back()}
-                className="flex-1"
+                className="inline-flex items-center gap-1 px-4 py-2 rounded-full border text-sm font-medium transition-all bg-background hover:bg-accent border-input"
               >
-                Cancel
-              </Button>
-              <Button
-                type="submit"
-                disabled={isSubmitting || !selectedCurrency || !selectedNetwork}
-                className="flex-1"
+                More
+                <ChevronDown className="h-4 w-4" />
+              </button>
+            </DialogTrigger>
+            <DialogContent className="max-w-md">
+              <DialogHeader>
+                <DialogTitle>Select Currency</DialogTitle>
+              </DialogHeader>
+              <Command>
+                <CommandInput placeholder="Search currency..." />
+                <CommandList>
+                  <CommandEmpty>No currency found.</CommandEmpty>
+                  <CommandGroup>
+                    {CURRENCIES.map((currency) => (
+                      <CommandItem
+                        key={currency.code}
+                        value={currency.code}
+                        onSelect={() => {
+                          setSelectedCurrency(currency.code)
+                          setSelectedNetwork('')
+                          setOpenCurrencyDialog(false)
+                        }}
+                      >
+                        <Image
+                          src={currency.icon}
+                          alt={currency.code}
+                          width={24}
+                          height={24}
+                          className="rounded-full mr-3"
+                        />
+                        <div className="flex-1">
+                          <div className="font-medium">{currency.code}</div>
+                          <div className="text-xs text-muted-foreground">{currency.name}</div>
+                        </div>
+                        {selectedCurrency === currency.code && (
+                          <Check className="h-4 w-4 text-primary" />
+                        )}
+                      </CommandItem>
+                    ))}
+                  </CommandGroup>
+                </CommandList>
+              </Command>
+            </DialogContent>
+          </Dialog>
+        </div>
+
+        <div className="bg-card border rounded-lg p-6 space-y-5">
+          {/* Amount Input */}
+          <div className="space-y-2">
+            <Label htmlFor="amount">Amount *</Label>
+            <Input
+              id="amount"
+              name="amount"
+              type="number"
+              step="0.000001"
+              min="0"
+              placeholder="0.00"
+              required
+              className="h-10"
+            />
+          </div>
+
+          {/* Deposit Currency Dropdown */}
+          <div className="space-y-2">
+            <Label>Deposit Currency *</Label>
+            <Dialog open={openCurrencyDialog} onOpenChange={setOpenCurrencyDialog}>
+              <DialogTrigger asChild>
+                <button
+                  type="button"
+                  className={cn(
+                    "w-full flex items-center justify-between px-4 py-2.5 bg-background border rounded-md text-left hover:bg-accent transition-colors",
+                    !selectedCurrency && "text-muted-foreground"
+                  )}
+                >
+                  {selectedCurrency ? (
+                    <div className="flex items-center gap-2">
+                      <Image
+                        src={selectedCurrencyData?.icon || ''}
+                        alt={selectedCurrency}
+                        width={24}
+                        height={24}
+                        className="rounded-full"
+                      />
+                      <span className="font-medium">{selectedCurrency}</span>
+                    </div>
+                  ) : (
+                    <span>Select currency</span>
+                  )}
+                  <ChevronDown className="h-4 w-4" />
+                </button>
+              </DialogTrigger>
+            </Dialog>
+          </div>
+
+          {/* Network Selection Dropdown */}
+          {selectedCurrency && selectedCurrencyData && (
+            <div className="space-y-2">
+              <Label>Choose Coin Network *</Label>
+              <Select
+                value={selectedNetwork}
+                onValueChange={setSelectedNetwork}
+                required
               >
-                {isSubmitting ? 'Creating...' : 'Create Invoice'}
-              </Button>
+                <SelectTrigger className="h-10">
+                  <SelectValue placeholder="Select network" />
+                </SelectTrigger>
+                <SelectContent>
+                  {selectedCurrencyData.networks.map((network) => (
+                    <SelectItem key={network.network} value={network.network}>
+                      {network.displayName || network.network.toUpperCase()}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
-          </form>
-        </CardContent>
-      </Card>
+          )}
+
+          {/* Description */}
+          <div className="space-y-2">
+            <Label htmlFor="description">Description (Optional)</Label>
+            <Textarea
+              id="description"
+              name="description"
+              placeholder="Payment for..."
+              rows={3}
+              className="resize-none"
+            />
+          </div>
+
+          {/* Order ID */}
+          <div className="space-y-2">
+            <Label htmlFor="orderId">Order ID (Optional)</Label>
+            <Input
+              id="orderId"
+              name="orderId"
+              placeholder="ORD-12345"
+            />
+          </div>
+        </div>
+
+        {/* Testnet Warning */}
+        {isTestnet && (
+          <div className="flex items-center gap-2 px-3 py-2 bg-yellow-50 dark:bg-yellow-950/50 border border-yellow-200 dark:border-yellow-800 rounded-md">
+            <span className="text-xs text-yellow-800 dark:text-yellow-200">
+              Testnet Mode - Test transactions only
+            </span>
+          </div>
+        )}
+
+        {/* Actions */}
+        <div className="flex gap-3">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => router.back()}
+            disabled={isSubmitting}
+          >
+            Cancel
+          </Button>
+          <Button
+            type="submit"
+            disabled={isSubmitting || !selectedCurrency || !selectedNetwork}
+            className="flex-1"
+          >
+            {isSubmitting ? 'Creating...' : 'Create Invoice'}
+          </Button>
+        </div>
+      </form>
     </div>
   )
 }

@@ -1,5 +1,4 @@
 import { CreateInvoiceForm } from './_components/create-invoice-form'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -18,7 +17,7 @@ export default async function CreateInvoicePage({
 }) {
   const { id: merchantId } = await params
   const merchant = await getMerchant(merchantId)
-  
+
 
   return (
     <div className="flex flex-col gap-4">
@@ -42,19 +41,14 @@ export default async function CreateInvoicePage({
         </BreadcrumbList>
       </Breadcrumb>
 
-      <div className="w-full max-w-xl">
-        <Card>
-          <CardHeader>
-            <CardTitle>New Invoice</CardTitle>
-            <CardDescription>
-              Generate payment request for {merchant.name}
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <CreateInvoiceForm merchantId={merchantId} />
-          </CardContent>
-        </Card>
+      <div className="mb-2">
+        <h1 className="text-2xl font-semibold">Create Invoice</h1>
+        <p className="text-sm text-muted-foreground mt-1">
+          {merchant.name}
+        </p>
       </div>
+
+      <CreateInvoiceForm merchantId={merchantId} />
     </div>
   )
 }

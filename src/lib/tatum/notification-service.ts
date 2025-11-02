@@ -29,10 +29,15 @@ export class TatumNotificationService {
 
   constructor() {
     if (!process.env.WEBHOOK_BASE_URL) {
+      console.error('❌ WEBHOOK_BASE_URL environment variable is not set!')
+      console.error('   Add to .env: WEBHOOK_BASE_URL=https://your-domain.com')
+      console.error('   For local dev: Use ngrok and set WEBHOOK_BASE_URL=https://abc123.ngrok.io')
       throw new Error('WEBHOOK_BASE_URL environment variable is required')
     }
     this.webhookBaseUrl = process.env.WEBHOOK_BASE_URL
-    
+
+    console.log(`🌐 [WEBHOOK] Base URL: ${this.webhookBaseUrl}`)
+
     // Start cleanup process if not already running
     if (process.env.NODE_ENV === 'production') {
       this.startPeriodicCleanup()
@@ -110,11 +115,11 @@ export class TatumNotificationService {
     try {
       console.log(`🔔 Processing webhook for invoice: ${invoiceId}`)
 
-      // Find the invoice and its address
+      // Find the invoice and its payment address
       const invoice = await prisma.invoice.findUnique({
         where: { id: invoiceId },
         include: {
-          address: true,
+          paymentAddress: true,
           merchant: true
         }
       })
@@ -124,14 +129,14 @@ export class TatumNotificationService {
       }
 
       // Verify the address matches
-      if (invoice.address.address.toLowerCase() !== webhookPayload.address.toLowerCase()) {
-        throw new Error(`Address mismatch: expected ${invoice.address.address}, got ${webhookPayload.address}`)
+      if (invoice.paymentAddress.address.toLowerCase() !== webhookPayload.address.toLowerCase()) {
+        throw new Error(`Address mismatch: expected ${invoice.paymentAddress.address}, got ${webhookPayload.address}`)
       }
 
       // Create webhook notification record
       await prisma.webhookNotification.create({
         data: {
-          addressId: invoice.addressId,
+          paymentAddressId: invoice.paymentAddressId,
           invoiceId: invoice.id,
           txHash: webhookPayload.txId,
           amount: parseFloat(webhookPayload.amount),
@@ -144,12 +149,12 @@ export class TatumNotificationService {
         }
       })
 
-      // Update address activity
-      await prisma.address.update({
-        where: { id: invoice.addressId },
+      // Update payment address activity
+      await prisma.paymentAddress.update({
+        where: { id: invoice.paymentAddressId },
         data: {
-          lastActivityAt: new Date(),
-          firstUsedAt: invoice.address.firstUsedAt || new Date()
+          lastSeenAt: new Date(),
+          firstSeenAt: invoice.paymentAddress.firstSeenAt || new Date()
         }
       })
 
@@ -189,55 +194,52 @@ export class TatumNotificationService {
         }
       })
 
-      // Find or create merchant balance for this currency/network
+      // Update merchant wallet balance for this currency/network
       try {
-        // Get the wallet associated with this invoice
-        const wallet = await tx.wallet.findFirst({
-          where: {
-            id: invoice.address.walletId
-          }
+        // Get the asset network associated with this invoice's payment address
+        const paymentAddress = await tx.paymentAddress.findUnique({
+          where: { id: invoice.paymentAddressId },
+          include: { assetNetwork: true }
         })
 
-        if (!wallet) {
-          throw new Error(`Wallet not found for invoice ${invoice.id}`)
+        if (!paymentAddress) {
+          throw new Error(`Payment address not found for invoice ${invoice.id}`)
         }
 
-        // Find existing merchant balance or create one
-        let merchantBalance = await tx.merchantBalance.findFirst({
+        // Find existing merchant wallet or create one
+        let merchantWallet = await tx.merchantWallet.findFirst({
           where: {
             merchantId: invoice.merchantId,
-            walletId: wallet.id
+            assetNetworkId: paymentAddress.assetNetworkId
           }
         })
 
-        if (!merchantBalance) {
-          // Create merchant balance if it doesn't exist
-          merchantBalance = await tx.merchantBalance.create({
+        if (!merchantWallet) {
+          // Create merchant wallet if it doesn't exist
+          merchantWallet = await tx.merchantWallet.create({
             data: {
               merchantId: invoice.merchantId,
-              walletId: wallet.id,
-              balance: 0,
-              lockedBalance: 0,
-              totalReceived: 0,
-              totalWithdrawn: 0
+              assetNetworkId: paymentAddress.assetNetworkId,
+              availableBalance: 0,
+              pendingBalance: 0,
+              lockedBalance: 0
             }
           })
-          console.log(`💰 Created new merchant balance for ${webhookPayload.asset} wallet`)
+          console.log(`💰 Created new merchant wallet for ${webhookPayload.asset}`)
         }
 
-        // Update merchant balance
-        await tx.merchantBalance.update({
-          where: { id: merchantBalance.id },
+        // Update merchant wallet balance
+        await tx.merchantWallet.update({
+          where: { id: merchantWallet.id },
           data: {
-            balance: { increment: paymentAmount },
-            totalReceived: { increment: paymentAmount }
+            availableBalance: { increment: paymentAmount }
           }
         })
-        
-        console.log(`💰 Updated merchant balance: +${paymentAmount} ${webhookPayload.asset} for merchant ${invoice.merchantId}`)
-        
+
+        console.log(`💰 Updated merchant wallet: +${paymentAmount} ${webhookPayload.asset} for merchant ${invoice.merchantId}`)
+
       } catch (balanceError) {
-        console.error(`❌ Failed to update merchant balance:`, balanceError)
+        console.error(`❌ Failed to update merchant wallet:`, balanceError)
         // Continue with payment processing even if balance update fails
       }
 
@@ -382,7 +384,7 @@ export class TatumNotificationService {
     recentActivity: number
   }> {
     const [addressCount, totalNotifications, recentActivity] = await Promise.all([
-      prisma.address.count(),
+      prisma.paymentAddress.count(),
       prisma.webhookNotification.count(),
       prisma.webhookNotification.count({
         where: {
@@ -515,8 +517,8 @@ export class TatumNotificationService {
       notifications7d,
       notifications30d
     ] = await Promise.all([
-      prisma.address.count(),
-      prisma.address.count({ where: { assignedToInvoice: { not: null } } }),
+      prisma.paymentAddress.count(),
+      prisma.paymentAddress.count({ where: { invoiceId: { not: null } } }),
       prisma.invoice.count({ where: { status: 'PENDING' } }),
       prisma.invoice.count({ where: { status: 'PAID' } }),
       prisma.invoice.count({ where: { status: 'EXPIRED' } }),

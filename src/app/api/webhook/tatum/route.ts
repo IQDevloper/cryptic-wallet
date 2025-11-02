@@ -75,7 +75,7 @@ export async function POST(request: NextRequest) {
             status: { in: ['PENDING', 'UNDERPAID'] } // Only process active invoices
           },
           include: {
-            derivedAddress: true
+            paymentAddress: true
           }
         })
 

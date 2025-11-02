@@ -489,9 +489,14 @@ export function getNetworkColor(currency: string, network: string): string | nul
  */
 export function formatCurrencyAmount(amount: number, currency: string): string {
   const config = getCurrencyConfig(currency)
-  const decimals = config?.decimals || 8
-  
-  return amount.toFixed(Math.min(decimals, 8)) // Cap at 8 decimal places for display
+
+  // Remove trailing zeros and unnecessary decimals
+  const formatted = amount.toLocaleString('en-US', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: currency === 'BTC' || currency === 'ETH' ? 6 : 2,
+  })
+
+  return formatted
 }
 
 /**

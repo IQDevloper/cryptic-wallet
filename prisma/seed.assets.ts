@@ -121,7 +121,6 @@ async function upsertNetwork(
 ) {
   const name = NETWORK_NAME[code] ?? code;
   const type = NETWORK_TYPE[code];
-  const chainId = EVM_CHAIN_IDS[code] ?? null;
   const confirmations = DEFAULT_CONFIRMATIONS[code] ?? 6;
   const tatumChainId = TATUM_CHAIN_ID[code];
 
@@ -129,7 +128,6 @@ async function upsertNetwork(
     where: { code },
     update: {
       name,
-      chainId,
       type,
       blockConfirmations: confirmations,
       tatumChainId,
@@ -139,7 +137,6 @@ async function upsertNetwork(
     create: {
       code,
       name,
-      chainId,
       type,
       blockConfirmations: confirmations,
       tatumChainId,
@@ -166,22 +163,15 @@ async function upsertAsset(
     update: {
       name: p.name,
       type,
-      decimals: p.decimals,
       logoUrl: p.logoUrl,
-      coinGeckoId: p.coinGeckoId,
-      coinMarketCapId: p.coinMarketCapId,
       isActive: true,
     },
     create: {
       symbol,
       name: p.name,
       type,
-      decimals: p.decimals,
       logoUrl: p.logoUrl,
-      coinGeckoId: p.coinGeckoId,
-      coinMarketCapId: p.coinMarketCapId,
       isActive: true,
-      priority: 0,
     },
   });
 }
@@ -209,8 +199,6 @@ async function upsertAssetNetwork(
       contractAddress: p.contractAddress ?? null,
       decimals: p.decimals,
       tokenStandard: p.tokenStandard ?? null,
-      minAmount: '0', // adjust per-asset if needed
-      depositFee: '0',
       isActive: true,
     },
   });
@@ -226,22 +214,24 @@ async function upsertSystemWallet(
   },
 ) {
   if (!p.signatureId) return null; // skip until you fill kms.wallets.json
-  return prisma.systemWallet.upsert({
-    where: { signatureId: p.signatureId },
+  return prisma.kmsWallet.upsert({
+    where: {
+      networkId_signatureId: {
+        networkId,
+        signatureId: p.signatureId
+      }
+    },
     update: {
       xpub: p.xpub,
       derivationPath: p.derivationPath ?? `m/44'/60'/0'/0`,
       status: WalletStatus.ACTIVE,
     },
     create: {
-      assetNetworkId,
       networkId,
       signatureId: p.signatureId,
-      walletType: WalletType.MNEMONIC,
       xpub: p.xpub,
       derivationPath: p.derivationPath ?? `m/44'/60'/0'/0`,
       nextAddressIndex: BigInt(0),
-      totalBalance: '0',
       status: WalletStatus.PENDING_SETUP,
     },
   });

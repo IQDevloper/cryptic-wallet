@@ -1,6 +1,7 @@
 'use client'
 
 import React, { useState, useRef, useEffect } from 'react'
+import { useRouter } from 'next/navigation'
 import {
     Table,
     TableBody,
@@ -23,6 +24,7 @@ import { formatCurrency, formatDate } from '@/lib/utils'
 import { Search, Download, Copy, ChevronDown, ChevronUp, AlertCircle, RefreshCw } from 'lucide-react'
 import { trpc } from '@/lib/trpc/client'
 import Image from 'next/image'
+import { getCurrencyIcon, formatCurrencyAmount, getCurrencyConfig } from '@/lib/crypto-assets-config'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { toast } from 'sonner'
 import {
@@ -51,6 +53,7 @@ const getStatusVariant = (status: string): "default" | "secondary" | "destructiv
 }
 
 export function MerchantInvoices({ merchant }: { merchant: Merchant }) {
+    const router = useRouter()
     const searchInputRef = useRef<HTMLInputElement>(null)
     const [searchQuery, setSearchQuery] = useState('')
     const [debouncedSearchQuery] = useDebounce(searchQuery, 500)
@@ -259,42 +262,60 @@ export function MerchantInvoices({ merchant }: { merchant: Merchant }) {
                                         )}
                                     </TableCell>
                                     <TableCell className="font-medium">
-                                        <TooltipProvider>
-                                            <Tooltip>
-                                                <TooltipTrigger className="flex items-center gap-2">
-                                                    {truncateText(invoice.id)}
-                                                    <Copy
-                                                        className="h-4 w-4 text-muted-foreground hover:text-foreground cursor-pointer"
-                                                        onClick={(e) => {
-                                                            e.stopPropagation()
-                                                            copyToClipboard(invoice.id, 'Invoice ID')
-                                                        }}
-                                                    />
-                                                </TooltipTrigger>
-                                                <TooltipContent>
-                                                    <p>Copy invoice ID</p>
-                                                </TooltipContent>
-                                            </Tooltip>
-                                        </TooltipProvider>
+                                        <div className="flex items-center gap-2">
+                                            <TooltipProvider>
+                                                <Tooltip>
+                                                    <TooltipTrigger asChild>
+                                                        <button
+                                                            className="hover:text-primary transition-colors text-left"
+                                                            onClick={(e) => {
+                                                                e.stopPropagation()
+                                                                router.push(`/dashboard/merchants/${merchant.id}/invoices/${invoice.id}`)
+                                                            }}
+                                                        >
+                                                            {truncateText(invoice.id)}
+                                                        </button>
+                                                    </TooltipTrigger>
+                                                    <TooltipContent>
+                                                        <p>Click to view invoice details</p>
+                                                    </TooltipContent>
+                                                </Tooltip>
+                                            </TooltipProvider>
+                                            <Copy
+                                                className="h-3 w-3 text-muted-foreground hover:text-foreground cursor-pointer shrink-0"
+                                                onClick={(e) => {
+                                                    e.stopPropagation()
+                                                    copyToClipboard(invoice.id, 'Invoice ID')
+                                                }}
+                                            />
+                                        </div>
                                     </TableCell>
                                     <TableCell>
                                         <div className="flex items-center space-x-3">
-                                            <div className="relative h-8 w-8">
-                                                <Image
-                                                    src={invoice.currency.imageUrl}
-                                                    alt={invoice.currency.name}
-                                                    fill
-                                                    className="rounded-full object-cover"
-                                                />
-                                            </div>
+                                            {getCurrencyIcon(invoice.currency) && (
+                                                <div className="relative h-8 w-8">
+                                                    <Image
+                                                        src={getCurrencyIcon(invoice.currency)!}
+                                                        alt={getCurrencyConfig(invoice.currency)?.name || invoice.currency}
+                                                        fill
+                                                        className="rounded-full object-cover"
+                                                        onError={(e) => {
+                                                            (e.target as HTMLImageElement).style.display = 'none'
+                                                        }}
+                                                    />
+                                                </div>
+                                            )}
                                             <div className="flex flex-col">
                                                 <div className="flex items-baseline gap-1">
-                                                    <span className="font-medium">{formatCurrency(invoice.amount)}</span>
-                                                    <span className="text-xs text-muted-foreground">↓</span>
+                                                    <span className="font-medium">
+                                                        {formatCurrencyAmount(parseFloat(invoice.amount), invoice.currency)} {invoice.currency}
+                                                    </span>
                                                 </div>
-                                                {invoice.amountPaid > 0 && (
+                                                {parseFloat(invoice.amountPaid) > 0 && (
                                                     <div className="flex items-baseline gap-1 text-green-600">
-                                                        <span className="font-medium">{formatCurrency(invoice.amountPaid)}</span>
+                                                        <span className="font-medium">
+                                                            Paid: {formatCurrencyAmount(parseFloat(invoice.amountPaid), invoice.currency)} {invoice.currency}
+                                                        </span>
                                                         <span className="text-xs">✓</span>
                                                     </div>
                                                 )}
@@ -319,9 +340,23 @@ export function MerchantInvoices({ merchant }: { merchant: Merchant }) {
                                                         </CardHeader>
                                                         <CardContent className="space-y-2">
                                                             <div className="flex justify-between">
-                                                                <span className="text-sm text-muted-foreground">Paid:</span>
-                                                                <span className="font-medium">{formatCurrency(invoice.amountPaid)} {invoice.currency.code}</span>
+                                                                <span className="text-sm text-muted-foreground">Amount Due:</span>
+                                                                <span className="font-medium">
+                                                                    {formatCurrencyAmount(parseFloat(invoice.amount), invoice.currency)} {invoice.currency}
+                                                                </span>
                                                             </div>
+                                                            <div className="flex justify-between">
+                                                                <span className="text-sm text-muted-foreground">Paid:</span>
+                                                                <span className="font-medium">
+                                                                    {formatCurrencyAmount(parseFloat(invoice.amountPaid), invoice.currency)} {invoice.currency}
+                                                                </span>
+                                                            </div>
+                                                            {invoice.network && (
+                                                                <div className="flex justify-between">
+                                                                    <span className="text-sm text-muted-foreground">Network:</span>
+                                                                    <span className="font-medium uppercase">{invoice.network}</span>
+                                                                </div>
+                                                            )}
                                                         </CardContent>
                                                     </Card>
 
@@ -330,24 +365,32 @@ export function MerchantInvoices({ merchant }: { merchant: Merchant }) {
                                                             <CardTitle className="text-sm font-medium">Payment Address</CardTitle>
                                                         </CardHeader>
                                                         <CardContent>
-                                                            <div className="flex items-center space-x-2">
-                                                                <code className="rounded bg-muted px-2 py-1 text-sm">
-                                                                    {truncateText(invoice.address, 12, 8)}
-                                                                </code>
-                                                                <TooltipProvider>
-                                                                    <Tooltip>
-                                                                        <TooltipTrigger>
-                                                                            <Copy
-                                                                                className="h-4 w-4 cursor-pointer text-muted-foreground hover:text-foreground"
-                                                                                onClick={() => copyToClipboard(invoice.address, 'Payment address')}
-                                                                            />
-                                                                        </TooltipTrigger>
-                                                                        <TooltipContent>
-                                                                            <p>Copy payment address</p>
-                                                                        </TooltipContent>
-                                                                    </Tooltip>
-                                                                </TooltipProvider>
-                                                            </div>
+                                                            {invoice.depositAddress ? (
+                                                                <div className="flex flex-wrap items-start gap-2">
+                                                                    <code className="flex-1 min-w-0 rounded bg-muted px-3 py-2 text-xs font-mono break-all whitespace-normal text-foreground">
+                                                                        {invoice.depositAddress}
+                                                                    </code>
+                                                                    <TooltipProvider>
+                                                                        <Tooltip>
+                                                                            <TooltipTrigger asChild>
+                                                                                <Button
+                                                                                    variant="ghost"
+                                                                                    size="sm"
+                                                                                    className="h-8 w-8 shrink-0 p-0"
+                                                                                    onClick={() => copyToClipboard(invoice.depositAddress, 'Payment address')}
+                                                                                >
+                                                                                    <Copy className="h-4 w-4" />
+                                                                                </Button>
+                                                                            </TooltipTrigger>
+                                                                            <TooltipContent>
+                                                                                <p>Copy payment address</p>
+                                                                            </TooltipContent>
+                                                                        </Tooltip>
+                                                                    </TooltipProvider>
+                                                                </div>
+                                                            ) : (
+                                                                <p className="text-sm text-muted-foreground">N/A</p>
+                                                            )}
                                                         </CardContent>
                                                     </Card>
 
