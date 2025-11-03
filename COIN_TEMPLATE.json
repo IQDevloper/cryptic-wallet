@@ -1,0 +1,293 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title": "Cryptocurrency Addition Template",
+  "description": "Use this template to define a new cryptocurrency for the AI Add Coin tool",
+  "examples": [
+    {
+      "comment": "Example 1: Native Coin (Solana)",
+      "symbol": "SOL",
+      "name": "Solana",
+      "description": "High-performance blockchain supporting smart contracts and DeFi applications",
+      "networkType": "SOLANA",
+      "isNative": true,
+      "decimals": 9,
+      "derivationPath": "m/44'/501'/0'/0'",
+      "coinType": 501,
+      "chainName": "Solana",
+      "tatumChainId": "solana-mainnet",
+      "explorerUrl": "https://explorer.solana.com",
+      "blockConfirmations": 32,
+      "logoUrl": "https://cryptologos.cc/logos/solana-sol-logo.png",
+      "tatumSupported": true,
+      "kmsChainCode": "SOL"
+    },
+    {
+      "comment": "Example 2: Multi-Network Token (USDC)",
+      "symbol": "USDC",
+      "name": "USD Coin",
+      "description": "Fully-backed dollar stablecoin by Circle and Coinbase",
+      "networkType": "EVM",
+      "isNative": false,
+      "decimals": 6,
+      "networks": [
+        {
+          "networkCode": "ethereum",
+          "contractAddress": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+          "tokenStandard": "ERC-20"
+        },
+        {
+          "networkCode": "bsc",
+          "contractAddress": "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d",
+          "tokenStandard": "BEP-20"
+        },
+        {
+          "networkCode": "polygon",
+          "contractAddress": "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
+          "tokenStandard": "Polygon"
+        },
+        {
+          "networkCode": "arbitrum",
+          "contractAddress": "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
+          "tokenStandard": "ERC-20"
+        }
+      ],
+      "logoUrl": "https://cryptologos.cc/logos/usd-coin-usdc-logo.png",
+      "tatumSupported": true
+    },
+    {
+      "comment": "Example 3: EVM Native Coin (Avalanche)",
+      "symbol": "AVAX",
+      "name": "Avalanche",
+      "description": "Smart contracts platform for decentralized applications and custom blockchain networks",
+      "networkType": "EVM",
+      "isNative": true,
+      "decimals": 18,
+      "derivationPath": "m/44'/9000'/0'/0",
+      "coinType": 9000,
+      "chainName": "Avalanche",
+      "tatumChainId": "avalanche-mainnet",
+      "explorerUrl": "https://snowtrace.io",
+      "blockConfirmations": 12,
+      "logoUrl": "https://cryptologos.cc/logos/avalanche-avax-logo.png",
+      "tatumSupported": true,
+      "kmsChainCode": "AVAX"
+    },
+    {
+      "comment": "Example 4: UTXO Coin (Litecoin)",
+      "symbol": "LTC",
+      "name": "Litecoin",
+      "description": "Peer-to-peer cryptocurrency created as Bitcoin fork with faster block times",
+      "networkType": "UTXO",
+      "isNative": true,
+      "decimals": 8,
+      "derivationPath": "m/44'/2'/0'/0",
+      "coinType": 2,
+      "chainName": "Litecoin",
+      "tatumChainId": "litecoin-mainnet",
+      "explorerUrl": "https://blockchair.com/litecoin",
+      "blockConfirmations": 6,
+      "logoUrl": "https://cryptologos.cc/logos/litecoin-ltc-logo.png",
+      "tatumSupported": true,
+      "kmsChainCode": "LTC"
+    },
+    {
+      "comment": "Example 5: ERC-20 Token (Chainlink)",
+      "symbol": "LINK",
+      "name": "Chainlink",
+      "description": "Decentralized oracle network providing real-world data to smart contracts",
+      "networkType": "EVM",
+      "isNative": false,
+      "decimals": 18,
+      "networks": [
+        {
+          "networkCode": "ethereum",
+          "contractAddress": "0x514910771AF9Ca656af840dff83E8264EcF986CA",
+          "tokenStandard": "ERC-20"
+        },
+        {
+          "networkCode": "bsc",
+          "contractAddress": "0xF8A0BF9cF54Bb92F17374d9e9A321E6a111a51bD",
+          "tokenStandard": "BEP-20"
+        },
+        {
+          "networkCode": "polygon",
+          "contractAddress": "0x53E0bca35eC356BD5ddDFebbD1Fc0fD03FaBad39",
+          "tokenStandard": "Polygon"
+        }
+      ],
+      "logoUrl": "https://cryptologos.cc/logos/chainlink-link-logo.png",
+      "tatumSupported": true
+    }
+  ],
+  "type": "object",
+  "required": [
+    "symbol",
+    "name",
+    "networkType",
+    "isNative",
+    "decimals"
+  ],
+  "properties": {
+    "symbol": {
+      "type": "string",
+      "description": "Cryptocurrency ticker symbol (e.g., BTC, ETH, SOL)",
+      "pattern": "^[A-Z]{2,10}$",
+      "examples": ["BTC", "ETH", "SOL", "AVAX", "USDC"]
+    },
+    "name": {
+      "type": "string",
+      "description": "Full name of the cryptocurrency",
+      "examples": ["Bitcoin", "Ethereum", "Solana", "Avalanche"]
+    },
+    "description": {
+      "type": "string",
+      "description": "Brief description of the cryptocurrency (1-2 sentences)",
+      "maxLength": 500
+    },
+    "networkType": {
+      "type": "string",
+      "enum": ["EVM", "UTXO", "TRON", "SOLANA", "POLKADOT", "COSMOS"],
+      "description": "Type of blockchain network"
+    },
+    "isNative": {
+      "type": "boolean",
+      "description": "true = Native blockchain coin, false = Token on another chain"
+    },
+    "decimals": {
+      "type": "integer",
+      "description": "Number of decimal places for the smallest unit",
+      "minimum": 0,
+      "maximum": 18,
+      "examples": [8, 18, 6, 9]
+    },
+    "derivationPath": {
+      "type": "string",
+      "description": "BIP44 derivation path (required for native coins)",
+      "pattern": "^m/44'/\\d+'/0'/0'?$",
+      "examples": [
+        "m/44'/0'/0'/0",
+        "m/44'/60'/0'/0",
+        "m/44'/501'/0'/0'"
+      ]
+    },
+    "coinType": {
+      "type": "integer",
+      "description": "BIP44 coin type number (required for native coins)",
+      "minimum": 0,
+      "examples": [0, 60, 501, 195, 9000]
+    },
+    "chainName": {
+      "type": "string",
+      "description": "Name of the blockchain (for native coins)",
+      "examples": ["Bitcoin", "Ethereum", "Solana", "Avalanche"]
+    },
+    "tatumChainId": {
+      "type": "string",
+      "description": "Tatum API chain identifier",
+      "examples": [
+        "bitcoin-mainnet",
+        "ethereum-mainnet",
+        "bsc-mainnet",
+        "solana-mainnet"
+      ]
+    },
+    "explorerUrl": {
+      "type": "string",
+      "format": "uri",
+      "description": "Blockchain explorer base URL",
+      "examples": [
+        "https://blockchain.com",
+        "https://etherscan.io",
+        "https://explorer.solana.com"
+      ]
+    },
+    "blockConfirmations": {
+      "type": "integer",
+      "description": "Number of block confirmations required for finality",
+      "minimum": 1,
+      "maximum": 100,
+      "default": 6,
+      "examples": [6, 12, 15, 19, 32]
+    },
+    "networks": {
+      "type": "array",
+      "description": "Networks where this token is deployed (for tokens only)",
+      "items": {
+        "type": "object",
+        "required": ["networkCode", "contractAddress", "tokenStandard"],
+        "properties": {
+          "networkCode": {
+            "type": "string",
+            "description": "Network identifier",
+            "examples": ["ethereum", "bsc", "polygon", "tron", "arbitrum"]
+          },
+          "contractAddress": {
+            "type": "string",
+            "description": "Smart contract address on this network",
+            "pattern": "^0x[a-fA-F0-9]{40}$|^T[a-zA-Z0-9]{33}$",
+            "examples": [
+              "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+              "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d"
+            ]
+          },
+          "tokenStandard": {
+            "type": "string",
+            "description": "Token standard used",
+            "enum": ["ERC-20", "BEP-20", "Polygon", "TRC-20", "SPL"],
+            "examples": ["ERC-20", "BEP-20", "TRC-20"]
+          }
+        }
+      }
+    },
+    "logoUrl": {
+      "type": "string",
+      "format": "uri",
+      "description": "URL to cryptocurrency logo image",
+      "examples": ["https://cryptologos.cc/logos/bitcoin-btc-logo.png"]
+    },
+    "tatumSupported": {
+      "type": "boolean",
+      "description": "Whether Tatum API supports this cryptocurrency",
+      "default": true
+    },
+    "kmsChainCode": {
+      "type": "string",
+      "description": "Chain code for Tatum KMS wallet generation (for native coins)",
+      "pattern": "^[A-Z]{2,10}$",
+      "examples": ["BTC", "ETH", "SOL", "BSC", "AVAX"]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "isNative": {
+            "const": true
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "derivationPath",
+          "coinType",
+          "chainName",
+          "tatumChainId",
+          "blockConfirmations",
+          "kmsChainCode"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "isNative": {
+            "const": false
+          }
+        }
+      },
+      "then": {
+        "required": ["networks"]
+      }
+    }
+  ]
+}

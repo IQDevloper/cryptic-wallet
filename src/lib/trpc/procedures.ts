@@ -140,3 +140,42 @@ export const userOwnsMerchantProcedure = t.procedure
       } as UserAuthenticatedContext & { merchant: typeof merchant },
     })
   })
+
+// Admin authentication middleware (for admin dashboard operations)
+export const adminProcedure = t.procedure.use(async ({ ctx, next }) => {
+  // Check if user is authenticated
+  if (!ctx.user) {
+    throw new TRPCError({
+      code: 'UNAUTHORIZED',
+      message: 'Authentication required',
+    })
+  }
+
+  // Verify user still exists and is active
+  const user = await ctx.prisma.user.findUnique({
+    where: { id: ctx.user.userId },
+  })
+
+  if (!user || !user.isActive) {
+    throw new TRPCError({
+      code: 'UNAUTHORIZED',
+      message: 'User account is inactive',
+    })
+  }
+
+  // Check if user has admin role
+  if (user.role !== 'ADMIN') {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'Admin access required',
+    })
+  }
+
+  return next({
+    ctx: {
+      ...ctx,
+      user: ctx.user,
+      dbUser: user,
+    } as UserAuthenticatedContext,
+  })
+})

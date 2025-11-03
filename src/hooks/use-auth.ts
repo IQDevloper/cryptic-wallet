@@ -7,6 +7,7 @@ interface User {
   userId: string
   email: string
   name: string
+  role: 'ADMIN' | 'MERCHANT'
 }
 
 export function useAuth() {
@@ -37,5 +38,15 @@ export function useAuth() {
     checkAuth()
   }, [router])
 
-  return { user, loading }
+  const logout = async () => {
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' })
+      setUser(null)
+      router.push('/auth/login')
+    } catch (error) {
+      console.error('Logout failed:', error)
+    }
+  }
+
+  return { user, loading, logout }
 }

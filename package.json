@@ -27,9 +27,12 @@
     "kms:test-addresses": "tsx scripts/test-address-generation.ts",
     "kms:test-invoices": "tsx scripts/test-invoice-creation.ts",
     "add-coin": "tsx scripts/add-coin.ts",
+    "ai:add-coin": "tsx scripts/ai-add-coin.ts",
+    "delete-coin": "tsx scripts/delete-coin.ts",
     "test:unified-wallets": "tsx scripts/test-unified-wallets.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.68.0",
     "@bitcoinerlab/secp256k1": "^1.2.0",
     "@hookform/resolvers": "^3.9.0",
     "@prisma/client": "^6.15.0",

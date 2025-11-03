@@ -10,6 +10,7 @@ import {
   invoiceRouter,
   transactionRouter,
   webhookRouter,
+  adminRouter,
 } from './routers'
 
 // Main app router
@@ -21,6 +22,7 @@ export const appRouter = createTRPCRouter({
   invoice: invoiceRouter,
   transaction: transactionRouter,
   webhook: webhookRouter,
+  admin: adminRouter,
 })
 
 export type AppRouter = typeof appRouter

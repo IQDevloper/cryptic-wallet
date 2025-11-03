@@ -11,10 +11,9 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
 import { trpc } from '@/lib/trpc/client'
 import { toast } from 'sonner'
-import { getSupportedCurrencies } from '@/lib/crypto-config'
 import Image from 'next/image'
 import { cn } from '@/lib/utils'
-import { Check, ChevronDown, Search } from 'lucide-react'
+import { Check, ChevronDown, Loader2 } from 'lucide-react'
 
 interface CreateInvoiceFormProps {
   merchantId: string
@@ -22,13 +21,6 @@ interface CreateInvoiceFormProps {
 
 // Determine if we're in testnet mode
 const isTestnet = process.env.NEXT_PUBLIC_TATUM_ENVIRONMENT === 'testnet'
-
-// Get supported currencies from our crypto configuration
-const CURRENCIES = getSupportedCurrencies().map(currency => ({
-  ...currency,
-  // Add testnet suffix for display in testnet mode
-  name: isTestnet && !currency.name.includes('Testnet') ? `${currency.name} (Testnet)` : currency.name
-}))
 
 // Quick select popular currencies
 const QUICK_SELECT_CURRENCIES = ['ETH', 'BTC', 'USDT', 'USDC']
@@ -39,7 +31,10 @@ export function CreateInvoiceForm({ merchantId }: CreateInvoiceFormProps) {
   const [selectedCurrency, setSelectedCurrency] = useState('')
   const [selectedNetwork, setSelectedNetwork] = useState('')
   const [openCurrencyDialog, setOpenCurrencyDialog] = useState(false)
-  
+
+  // Fetch active currencies from server
+  const { data: currencies, isLoading: loadingCurrencies, error: currenciesError } = trpc.currency.getActiveAssets.useQuery()
+
   const createInvoice = trpc.invoice.create.useMutation({
     onSuccess: (invoice) => {
       toast.success(`Invoice ${invoice.id} created successfully`)
@@ -78,9 +73,40 @@ export function CreateInvoiceForm({ merchantId }: CreateInvoiceFormProps) {
     })
   }
 
+  // Handle loading and error states
+  if (loadingCurrencies) {
+    return (
+      <div className="flex items-center justify-center py-12">
+        <Loader2 className="w-8 h-8 animate-spin text-primary" />
+        <span className="ml-3 text-muted-foreground">Loading currencies...</span>
+      </div>
+    )
+  }
+
+  if (currenciesError) {
+    return (
+      <div className="p-4 bg-destructive/10 border border-destructive rounded-lg">
+        <p className="text-destructive">Error loading currencies: {currenciesError.message}</p>
+      </div>
+    )
+  }
+
+  if (!currencies || currencies.length === 0) {
+    return (
+      <div className="p-4 bg-muted border rounded-lg">
+        <p className="text-muted-foreground">No currencies available. Please contact support.</p>
+      </div>
+    )
+  }
+
+  // Add testnet suffix for display in testnet mode
+  const CURRENCIES = currencies.map(currency => ({
+    ...currency,
+    name: isTestnet && !currency.name.includes('Testnet') ? `${currency.name} (Testnet)` : currency.name
+  }))
+
   const selectedCurrencyData = CURRENCIES.find(c => c.code === selectedCurrency)
   const quickSelectCurrencies = CURRENCIES.filter(c => QUICK_SELECT_CURRENCIES.includes(c.code))
-  const otherCurrencies = CURRENCIES.filter(c => !QUICK_SELECT_CURRENCIES.includes(c.code))
 
   return (
     <div className="max-w-3xl">

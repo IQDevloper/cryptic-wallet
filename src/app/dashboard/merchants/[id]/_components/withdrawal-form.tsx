@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import * as React from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -24,9 +25,52 @@ export function WithdrawalForm({ merchantId }: WithdrawalFormProps) {
   const [withdrawalPlan, setWithdrawalPlan] = useState<any>(null)
 
   // Get unified balances to show available amounts
-  const { data: unifiedBalances } = trpc.merchant.getBalances.useQuery({
+  const { data: balances } = trpc.merchant.getBalances.useQuery({
     merchantId,
   })
+
+  // Group balances by currency for display
+  const groupedBalances = React.useMemo(() => {
+    if (!balances) return []
+
+    const groups = new Map<string, {
+      currency: string
+      totalBalance: number
+      networks: Array<{
+        network: string
+        balance: number
+        availableBalance: number
+      }>
+      imageUrl: string | null
+      name: string
+    }>()
+
+    balances.forEach(balance => {
+      const existing = groups.get(balance.currency)
+      if (existing) {
+        existing.totalBalance += balance.availableBalance
+        existing.networks.push({
+          network: balance.network,
+          balance: balance.balance,
+          availableBalance: balance.availableBalance
+        })
+      } else {
+        groups.set(balance.currency, {
+          currency: balance.currency,
+          totalBalance: balance.availableBalance,
+          networks: [{
+            network: balance.network,
+            balance: balance.balance,
+            availableBalance: balance.availableBalance
+          }],
+          imageUrl: balance.imageUrl,
+          name: balance.name
+        })
+      }
+    })
+
+    return Array.from(groups.values())
+  }, [balances])
 
   // Withdrawal mutation
   const withdrawalMutation = trpc.merchant.requestWithdrawal.useMutation({
@@ -42,9 +86,9 @@ export function WithdrawalForm({ merchantId }: WithdrawalFormProps) {
   })
 
   // Available networks for selected currency
-  const selectedCurrencyData = unifiedBalances?.find(b => b.currency === currency)
-  const availableNetworks = unifiedBalances
-    ? unifiedBalances.filter(b => b.currency === currency).map(b => b.network)
+  const selectedCurrencyData = groupedBalances?.find(b => b.currency === currency)
+  const availableNetworks = balances
+    ? balances.filter(b => b.currency === currency).map(b => b.network)
     : []
 
   // Calculate estimated fees and routing
@@ -67,7 +111,8 @@ export function WithdrawalForm({ merchantId }: WithdrawalFormProps) {
     const networkFee = networkFees[targetNetwork] || 1.0
     
     // Check if we can withdraw directly from target network
-    const canWithdrawDirect = selectedCurrencyData.network === targetNetwork && selectedCurrencyData.availableBalance >= amountNum
+    const targetNetworkBalance = selectedCurrencyData.networks.find(n => n.network === targetNetwork)
+    const canWithdrawDirect = targetNetworkBalance && targetNetworkBalance.availableBalance >= amountNum
     
     return {
       needsBridging: !canWithdrawDirect,
@@ -120,7 +165,7 @@ export function WithdrawalForm({ merchantId }: WithdrawalFormProps) {
                 <SelectValue placeholder="Select currency to withdraw" />
               </SelectTrigger>
               <SelectContent>
-                {unifiedBalances?.map((balance) => (
+                {groupedBalances?.map((balance) => (
                   <SelectItem key={balance.currency} value={balance.currency}>
                     <div className="flex items-center justify-between w-full">
                       <span>{balance.currency}</span>
@@ -129,7 +174,7 @@ export function WithdrawalForm({ merchantId }: WithdrawalFormProps) {
                           {balance.totalBalance.toFixed(4)}
                         </span>
                         <Badge variant="secondary" className="text-xs">
-                          {Object.keys(balance.networkBreakdown).length} networks
+                          {balance.networks.length} {balance.networks.length === 1 ? 'network' : 'networks'}
                         </Badge>
                       </div>
                     </div>
@@ -158,12 +203,12 @@ export function WithdrawalForm({ merchantId }: WithdrawalFormProps) {
                 </div>
               </div>
               <div className="flex justify-between text-xs text-muted-foreground">
-                <span>Available: {selectedCurrencyData.availableBalance.toFixed(8)} {currency}</span>
+                <span>Available: {selectedCurrencyData.totalBalance.toFixed(8)} {currency}</span>
                 <Button
                   type="button"
                   variant="link"
                   className="h-auto p-0 text-xs"
-                  onClick={() => setAmount(selectedCurrencyData.availableBalance.toString())}
+                  onClick={() => setAmount(selectedCurrencyData.totalBalance.toString())}
                 >
                   Max
                 </Button>
@@ -180,19 +225,16 @@ export function WithdrawalForm({ merchantId }: WithdrawalFormProps) {
                   <SelectValue placeholder="Select target network" />
                 </SelectTrigger>
                 <SelectContent>
-                  {availableNetworks.map((network) => {
-                    const networkData = selectedCurrencyData!.networkBreakdown[network]
-                    return (
-                      <SelectItem key={network} value={network}>
-                        <div className="flex items-center justify-between w-full">
-                          <span className="capitalize">{network}</span>
-                          <span className="text-xs text-muted-foreground">
-                            {networkData.balance.toFixed(4)} {currency}
-                          </span>
-                        </div>
-                      </SelectItem>
-                    )
-                  })}
+                  {selectedCurrencyData?.networks.map((networkData) => (
+                    <SelectItem key={networkData.network} value={networkData.network}>
+                      <div className="flex items-center justify-between w-full">
+                        <span className="capitalize">{networkData.network}</span>
+                        <span className="text-xs text-muted-foreground">
+                          {networkData.availableBalance.toFixed(4)} {currency}
+                        </span>
+                      </div>
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
