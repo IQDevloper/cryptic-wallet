@@ -3,21 +3,13 @@ import axios from 'axios';
 const BINANCE_API_URL = 'https://api.binance.com/api/v3';
 
 // Map our currency codes to Binance symbols
-const CURRENCY_MAPPING: Record<string, string | null> = {
-  BTC: 'BTCUSDT',
-  ETH: 'ETHUSDT',
-  BNB: 'BNBUSDT',
-  TRX: 'TRXUSDT',
-  MATIC: 'MATICUSDT',
-  DOGE: 'DOGEUSDT',
-  LTC: 'LTCUSDT',
-  BCH: 'BCHUSDT',
-  USDC_ERC20: 'USDCUSDT',
-  USDC_TRC20: 'USDCUSDT',
-};
 
 export async function fetchPricesFromAPI(codes: string[]) {
   try {
+    let CURRENCY_MAPPING: Record<string, string> = codes.reduce((acc, code) => {
+      acc[code] = `${code}USDT`;
+      return acc;
+    }, {} as Record<string, string>);
     // Filter out codes with no Binance symbols
     const filteredCodes = codes.filter((code) => CURRENCY_MAPPING[code]);
 

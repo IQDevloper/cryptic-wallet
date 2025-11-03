@@ -382,6 +382,10 @@ export const merchantRouter = createTRPCRouter({
         // Use default empty prices if fetch fails
         prices = {};
       }
+      console.log('===========prices=========================');
+      console.log('assetSymbols', assetSymbols);
+      console.log(prices);
+      console.log('====================================');
 
       // Return complete asset network list with balances (or zero balances)
       return allAssetNetworks
