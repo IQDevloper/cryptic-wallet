@@ -20,6 +20,7 @@ export default function HomePage() {
           <Link href="#features" className="text-muted-foreground hover:text-foreground">Features</Link>
           <Link href="#how-it-works" className="text-muted-foreground hover:text-foreground">How it Works</Link>
           <Link href="#pricing" className="text-muted-foreground hover:text-foreground">Pricing</Link>
+          <Link href="/docs" className="text-muted-foreground hover:text-foreground">Docs</Link>
           <ThemeToggle />
           <Link href="/login">
             <Button variant="outline">Sign In</Button>
