@@ -1,7 +1,12 @@
-import { NextRequest } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import { PrismaClient } from '@prisma/client'
 
-import { apiHandler } from '@/lib/api/middleware'
+import {
+  corsHeaders,
+  formatErrorResponse,
+  formatSuccessResponse,
+  generateRequestId,
+} from '@/lib/api/middleware'
 
 const prisma = new PrismaClient()
 
@@ -9,20 +14,16 @@ interface RouteContext {
   params: { id: string }
 }
 
-type ApiContext = RouteContext & {
-  merchant: { id: string }
-  requestId: string
+export async function OPTIONS() {
+  return new NextResponse(null, { status: 200, headers: corsHeaders })
 }
 
-export const GET = apiHandler(
-  async (request: NextRequest, context: ApiContext) => {
-    const invoiceId = context.params.id
+export async function GET(request: NextRequest, { params }: RouteContext) {
+  const requestId = generateRequestId()
 
-    const invoice = await prisma.invoice.findFirst({
-      where: {
-        id: invoiceId,
-        merchantId: context.merchant.id,
-      },
+  try {
+    const invoice = await prisma.invoice.findUnique({
+      where: { id: params.id },
       include: {
         merchant: {
           include: {
@@ -37,20 +38,12 @@ export const GET = apiHandler(
                 network: true,
               },
             },
-            kmsWallet: {
-              include: {
-                network: true,
-              },
-            },
           },
-        },
-        transactions: {
-          orderBy: { createdAt: 'desc' },
         },
       },
     })
 
-    if (!invoice) {
+    if (!invoice || invoice.deletedAt) {
       const notFoundError = new Error('Invoice not found') as Error & {
         code?: string
       }
@@ -58,29 +51,27 @@ export const GET = apiHandler(
       throw notFoundError
     }
 
-    return {
+    const networkCode =
+      invoice.paymentAddress?.assetNetwork?.network.code ?? invoice.network
+
+    const responseData = {
       id: invoice.id,
       amount: invoice.amount.toString(),
       amountPaid: invoice.amountPaid.toString(),
       currency: invoice.currency,
-      network: invoice.paymentAddress?.assetNetwork?.network.code ?? invoice.network,
+      network: networkCode,
       status: invoice.status,
       description: invoice.description,
       orderId: invoice.orderId,
       depositAddress: invoice.depositAddress,
       qrCodeData: invoice.qrCodeData,
-      customData: invoice.customData,
-      notifyUrl: invoice.notifyUrl,
-      redirectUrl: invoice.redirectUrl,
-      returnUrl: invoice.returnUrl,
       paymentUrl: `https://pay.cryptic.com/${invoice.id}`,
       expiresAt: invoice.expiresAt.toISOString(),
       createdAt: invoice.createdAt.toISOString(),
       paidAt: invoice.paidAt?.toISOString() ?? null,
-      confirmedAt: invoice.confirmedAt?.toISOString() ?? null,
+      isExpired: invoice.expiresAt.getTime() < Date.now(),
       merchant: invoice.merchant
         ? {
-            id: invoice.merchant.id,
             name: invoice.merchant.name,
             businessName: invoice.merchant.businessName,
             settings: invoice.merchant.merchantSettings
@@ -93,15 +84,29 @@ export const GET = apiHandler(
               : null,
           }
         : null,
-      transactions: invoice.transactions.map((tx) => ({
-        id: tx.id,
-        txHash: tx.txHash,
-        amount: tx.amount.toString(),
-        blockNumber: tx.blockNumber ? tx.blockNumber.toString() : null,
-        confirmations: tx.confirmations,
-        status: tx.status,
-        createdAt: tx.createdAt.toISOString(),
-      })),
     }
+
+    return NextResponse.json(formatSuccessResponse(responseData, requestId), {
+      status: 200,
+      headers: corsHeaders,
+    })
+  } catch (error) {
+    const errorResponse = formatErrorResponse(error, requestId)
+
+    const status =
+      errorResponse.error.code === 'NOT_FOUND'
+        ? 404
+        : errorResponse.error.code === 'CONFLICT'
+        ? 409
+        : errorResponse.error.code === 'VALIDATION_ERROR'
+        ? 400
+        : errorResponse.error.code === 'UNAUTHORIZED'
+        ? 401
+        : 500
+
+    return NextResponse.json(errorResponse, {
+      status,
+      headers: corsHeaders,
+    })
   }
-)
+}
